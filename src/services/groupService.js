@@ -1,4 +1,4 @@
-// src/services/groupService.js - COMPLETE FIXED VERSION
+// src/services/groupService.js - COMPLETELY OPTIMIZED
 import { 
   collection, 
   doc, 
@@ -13,15 +13,19 @@ import {
   arrayUnion,
   arrayRemove,
   serverTimestamp,
-  increment
+  runTransaction,
+  writeBatch
 } from 'firebase/firestore';
-import { ref, onValue, push } from 'firebase/database';
+import { ref, onValue, push, set } from 'firebase/database';
 import { db, rtdb } from '../config/firebase';
 
 // ============================================
 // GROUP SERVICE
 // ============================================
 export const groupService = {
+  /**
+   * Create a new group
+   */
   async createGroup(groupData) {
     try {
       const docRef = await addDoc(collection(db, 'groups'), {
@@ -41,13 +45,15 @@ export const groupService = {
     }
   },
 
+  /**
+   * Get groups by location with radius filtering
+   */
   async getGroupsByLocation(latitude, longitude, radius = 5) {
     try {
       const groupsRef = collection(db, 'groups');
       const q = query(
         groupsRef,
-        where('isActive', '==', true),
-        orderBy('createdAt', 'desc')
+        where('isActive', '==', true)
       );
       const snapshot = await getDocs(q);
       
@@ -61,6 +67,12 @@ export const groupService = {
           group.location.latitude, group.location.longitude
         );
         return distance <= radius;
+      }).sort((a, b) => {
+        // Sort by member count and creation date
+        const membersA = a.members?.length || 0;
+        const membersB = b.members?.length || 0;
+        if (membersA !== membersB) return membersB - membersA;
+        return (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0);
       });
     } catch (error) {
       console.error('Error fetching groups:', error);
@@ -68,6 +80,9 @@ export const groupService = {
     }
   },
 
+  /**
+   * Get user's groups
+   */
   async getUserGroups(userId) {
     try {
       const groupsRef = collection(db, 'groups');
@@ -81,71 +96,84 @@ export const groupService = {
       return snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
-      }));
+      })).sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
     } catch (error) {
       console.error('Error fetching user groups:', error);
       throw error;
     }
   },
 
+  /**
+   * Join a group
+   */
   async joinGroup(groupId, userId) {
     try {
-      const groupRef = doc(db, 'groups', groupId);
-      const groupDoc = await getDoc(groupRef);
-      
-      if (!groupDoc.exists()) {
-        throw new Error('Group not found');
-      }
+      return await runTransaction(db, async (transaction) => {
+        const groupRef = doc(db, 'groups', groupId);
+        const groupDoc = await transaction.get(groupRef);
+        
+        if (!groupDoc.exists()) {
+          throw new Error('Group not found');
+        }
 
-      const groupData = groupDoc.data();
-      
-      if (groupData.members?.includes(userId)) {
-        throw new Error('Already a member of this group');
-      }
+        const groupData = groupDoc.data();
+        
+        if (groupData.members?.includes(userId)) {
+          throw new Error('Already a member of this group');
+        }
 
-      if (groupData.maxMembers && groupData.members?.length >= groupData.maxMembers) {
-        throw new Error('Group is full');
-      }
+        if (groupData.maxMembers && groupData.members?.length >= groupData.maxMembers) {
+          throw new Error('Group is full');
+        }
 
-      await updateDoc(groupRef, {
-        members: arrayUnion(userId),
-        updatedAt: serverTimestamp()
+        transaction.update(groupRef, {
+          members: arrayUnion(userId),
+          updatedAt: serverTimestamp()
+        });
+        
+        return true;
       });
-      
-      return true;
     } catch (error) {
       console.error('Error joining group:', error);
       throw error;
     }
   },
 
+  /**
+   * Leave a group
+   */
   async leaveGroup(groupId, userId) {
     try {
-      const groupRef = doc(db, 'groups', groupId);
-      const groupDoc = await getDoc(groupRef);
-      
-      if (!groupDoc.exists()) {
-        throw new Error('Group not found');
-      }
+      return await runTransaction(db, async (transaction) => {
+        const groupRef = doc(db, 'groups', groupId);
+        const groupDoc = await transaction.get(groupRef);
+        
+        if (!groupDoc.exists()) {
+          throw new Error('Group not found');
+        }
 
-      const groupData = groupDoc.data();
-      
-      if (groupData.createdBy === userId) {
-        throw new Error('Group creator cannot leave the group');
-      }
+        const groupData = groupDoc.data();
+        
+        if (groupData.createdBy === userId) {
+          throw new Error('Group creator cannot leave the group');
+        }
 
-      await updateDoc(groupRef, {
-        members: arrayRemove(userId),
-        updatedAt: serverTimestamp()
+        transaction.update(groupRef, {
+          members: arrayRemove(userId),
+          updatedAt: serverTimestamp()
+        });
+        
+        return true;
       });
-      
-      return true;
     } catch (error) {
       console.error('Error leaving group:', error);
       throw error;
     }
   },
 
+  /**
+   * Get group by ID
+   */
   async getGroupById(groupId) {
     try {
       const groupRef = doc(db, 'groups', groupId);
@@ -161,24 +189,35 @@ export const groupService = {
     }
   },
 
+  /**
+   * Subscribe to group updates
+   */
   subscribeToGroup(groupId, callback) {
     const groupRef = doc(db, 'groups', groupId);
     return onSnapshot(groupRef, (doc) => {
       if (doc.exists()) {
         callback({ id: doc.id, ...doc.data() });
       }
+    }, (error) => {
+      console.error('Error in group subscription:', error);
     });
   },
 
+  /**
+   * Send message to group chat
+   */
   async sendMessage(groupId, message, userId, userName) {
     try {
       const messagesRef = ref(rtdb, `groupChats/${groupId}/messages`);
-      await push(messagesRef, {
+      const newMessageRef = push(messagesRef);
+      
+      await set(newMessageRef, {
         message,
         userId,
         userName,
         timestamp: Date.now()
       });
+      
       return true;
     } catch (error) {
       console.error('Error sending message:', error);
@@ -186,6 +225,9 @@ export const groupService = {
     }
   },
 
+  /**
+   * Subscribe to group chat messages
+   */
   subscribeToGroupChat(groupId, callback) {
     const messagesRef = ref(rtdb, `groupChats/${groupId}/messages`);
     return onValue(messagesRef, (snapshot) => {
@@ -197,6 +239,8 @@ export const groupService = {
         });
       });
       callback(messages.sort((a, b) => a.timestamp - b.timestamp));
+    }, (error) => {
+      console.error('Error in chat subscription:', error);
     });
   }
 };
@@ -205,6 +249,9 @@ export const groupService = {
 // PRODUCT SERVICE
 // ============================================
 export const productService = {
+  /**
+   * Get products by category
+   */
   async getProducts(category = null) {
     try {
       const productsRef = collection(db, 'products');
@@ -225,6 +272,9 @@ export const productService = {
     }
   },
 
+  /**
+   * Get product categories
+   */
   async getCategories() {
     try {
       const categoriesRef = collection(db, 'categories');
@@ -239,6 +289,9 @@ export const productService = {
     }
   },
 
+  /**
+   * Add new product (admin only)
+   */
   async addProduct(productData) {
     try {
       const docRef = await addDoc(collection(db, 'products'), {
@@ -259,29 +312,35 @@ export const productService = {
 };
 
 // ============================================
-// ORDER SERVICE - COMPLETELY FIXED
+// ORDER SERVICE - COMPLETELY OPTIMIZED
 // ============================================
 export const orderService = {
-  // Create individual order - FIXED
+  /**
+   * Create individual order with transaction safety
+   */
   async createIndividualOrder(groupId, orderData) {
     try {
       console.log('📦 Creating individual order for group:', groupId);
       
+      // Validate input
+      if (!groupId || !orderData.userId || !orderData.items?.length) {
+        throw new Error('Invalid order data');
+      }
+
       // Get or create active group order
       const groupOrderId = await this.getOrCreateActiveGroupOrder(groupId);
-      
       console.log('📋 Using group order:', groupOrderId);
 
-      // Create individual order document
+      // Create individual order
       const orderRef = await addDoc(collection(db, 'orders'), {
         groupId,
         groupOrderId,
         userId: orderData.userId,
-        userName: orderData.userName,
-        userEmail: orderData.userEmail,
-        userPhone: orderData.userPhone,
+        userName: orderData.userName || '',
+        userEmail: orderData.userEmail || '',
+        userPhone: orderData.userPhone || '',
         items: orderData.items,
-        totalAmount: orderData.totalAmount,
+        totalAmount: orderData.totalAmount || 0,
         paymentStatus: 'pending',
         orderStatus: 'placed',
         createdAt: serverTimestamp(),
@@ -293,14 +352,14 @@ export const orderService = {
       // Prepare participant data
       const participantData = {
         userId: orderData.userId,
-        userName: orderData.userName,
+        userName: orderData.userName || 'User',
         orderId: orderRef.id,
-        amount: orderData.totalAmount,
+        amount: orderData.totalAmount || 0,
         items: orderData.items.map(item => ({
-          id: item.id,
-          name: item.name,
-          quantity: item.quantity,
-          price: item.groupPrice,
+          id: item.id || '',
+          name: item.name || '',
+          quantity: item.quantity || 0,
+          price: item.groupPrice || 0,
           minQuantity: item.minQuantity || 1
         })),
         paymentStatus: 'pending',
@@ -310,8 +369,6 @@ export const orderService = {
       // Add to group order
       await this.addParticipantToGroupOrder(groupOrderId, participantData);
 
-      console.log('✅ Participant added to group order');
-
       return orderRef.id;
     } catch (error) {
       console.error('❌ Error creating order:', error);
@@ -319,7 +376,9 @@ export const orderService = {
     }
   },
 
-  // Get or create active group order - FIXED
+  /**
+   * Get or create active group order
+   */
   async getOrCreateActiveGroupOrder(groupId) {
     try {
       // Query for active collecting orders
@@ -361,144 +420,137 @@ export const orderService = {
     }
   },
 
-  // Add participant to group order - COMPLETELY FIXED
+  /**
+   * Add participant to group order with atomic updates
+   */
   async addParticipantToGroupOrder(groupOrderId, participantData) {
     try {
       console.log('➕ Adding participant to group order:', groupOrderId);
       
-      const groupOrderRef = doc(db, 'groupOrders', groupOrderId);
-      const groupOrderDoc = await getDoc(groupOrderRef);
-      
-      if (!groupOrderDoc.exists()) {
-        throw new Error('Group order not found');
-      }
+      return await runTransaction(db, async (transaction) => {
+        const groupOrderRef = doc(db, 'groupOrders', groupOrderId);
+        const groupOrderDoc = await transaction.get(groupOrderRef);
+        
+        if (!groupOrderDoc.exists()) {
+          throw new Error('Group order not found');
+        }
 
-      const currentData = groupOrderDoc.data();
-      const currentParticipants = currentData.participants || [];
-      
-      // Check if participant already exists
-      const existingIndex = currentParticipants.findIndex(
-        p => p.userId === participantData.userId || p.orderId === participantData.orderId
-      );
+        const currentData = groupOrderDoc.data();
+        const currentParticipants = currentData.participants || [];
+        
+        // Check if participant already exists
+        const existingIndex = currentParticipants.findIndex(
+          p => p.userId === participantData.userId || p.orderId === participantData.orderId
+        );
 
-      let updatedParticipants;
-      if (existingIndex >= 0) {
-        // Update existing participant
-        console.log('🔄 Updating existing participant');
-        updatedParticipants = [...currentParticipants];
-        updatedParticipants[existingIndex] = participantData;
-      } else {
-        // Add new participant
-        console.log('✨ Adding new participant');
-        updatedParticipants = [...currentParticipants, participantData];
-      }
+        let updatedParticipants;
+        if (existingIndex >= 0) {
+          // Update existing participant
+          console.log('🔄 Updating existing participant');
+          updatedParticipants = [...currentParticipants];
+          updatedParticipants[existingIndex] = {
+            ...updatedParticipants[existingIndex],
+            ...participantData
+          };
+        } else {
+          // Add new participant
+          console.log('✨ Adding new participant');
+          updatedParticipants = [...currentParticipants, participantData];
+        }
 
-      // Calculate totals
-      const totalAmount = updatedParticipants.reduce((sum, p) => sum + p.amount, 0);
-      const totalParticipants = updatedParticipants.length;
+        // Calculate totals
+        const totalAmount = updatedParticipants.reduce((sum, p) => sum + (p.amount || 0), 0);
+        const totalParticipants = updatedParticipants.length;
 
-      // Update group order with new participants
-      await updateDoc(groupOrderRef, {
-        participants: updatedParticipants,
-        totalAmount,
-        totalParticipants,
-        updatedAt: serverTimestamp()
+        // Calculate product quantities
+        const productQuantities = {};
+        updatedParticipants.forEach(participant => {
+          (participant.items || []).forEach(item => {
+            if (!item.id) return;
+            
+            if (productQuantities[item.id]) {
+              productQuantities[item.id].quantity += item.quantity || 0;
+            } else {
+              productQuantities[item.id] = {
+                quantity: item.quantity || 0,
+                minQuantity: item.minQuantity || 1,
+                name: item.name || '',
+                price: item.price || 0
+              };
+            }
+          });
+        });
+
+        // Check if all minimums are met
+        const minQuantityMet = Object.values(productQuantities).every(
+          product => product.quantity >= product.minQuantity
+        );
+
+        // Update group order
+        transaction.update(groupOrderRef, {
+          participants: updatedParticipants,
+          totalAmount,
+          totalParticipants,
+          productQuantities,
+          minQuantityMet,
+          updatedAt: serverTimestamp()
+        });
+
+        console.log(`✅ Group order updated: ${totalParticipants} participants, ₹${totalAmount}, minimums met: ${minQuantityMet}`);
+        
+        return true;
       });
-
-      console.log(`✅ Group order updated: ${totalParticipants} participants, ₹${totalAmount}`);
-
-      // Update product quantities
-      await this.updateProductQuantities(groupOrderId, updatedParticipants);
-
-      return true;
     } catch (error) {
       console.error('❌ Error adding participant:', error);
       throw error;
     }
   },
 
-  // Update product quantities - FIXED
-  async updateProductQuantities(groupOrderId, participants) {
-    try {
-      const productQuantities = {};
-
-      // Aggregate quantities
-      participants.forEach(participant => {
-        participant.items.forEach(item => {
-          if (productQuantities[item.id]) {
-            productQuantities[item.id].quantity += item.quantity;
-          } else {
-            productQuantities[item.id] = {
-              quantity: item.quantity,
-              minQuantity: item.minQuantity || 1,
-              name: item.name,
-              price: item.price
-            };
-          }
-        });
-      });
-
-      // Check minimums
-      const allMinimumsMet = Object.values(productQuantities).every(
-        product => product.quantity >= product.minQuantity
-      );
-
-      // Update
-      const groupOrderRef = doc(db, 'groupOrders', groupOrderId);
-      await updateDoc(groupOrderRef, {
-        productQuantities,
-        minQuantityMet: allMinimumsMet,
-        updatedAt: serverTimestamp()
-      });
-
-      console.log('✅ Product quantities updated, all minimums met:', allMinimumsMet);
-      
-      return allMinimumsMet;
-    } catch (error) {
-      console.error('❌ Error updating quantities:', error);
-      throw error;
-    }
-  },
-
-  // Update payment status - FIXED
+  /**
+   * Update payment status with cascade updates
+   */
   async updatePaymentStatus(orderId, status) {
     try {
       console.log(`💳 Updating payment: ${orderId} to ${status}`);
       
-      const orderRef = doc(db, 'orders', orderId);
-      const orderDoc = await getDoc(orderRef);
-      
-      if (!orderDoc.exists()) {
-        throw new Error('Order not found');
-      }
+      return await runTransaction(db, async (transaction) => {
+        const orderRef = doc(db, 'orders', orderId);
+        const orderDoc = await transaction.get(orderRef);
+        
+        if (!orderDoc.exists()) {
+          throw new Error('Order not found');
+        }
 
-      const orderData = orderDoc.data();
-      
-      // Update order
-      await updateDoc(orderRef, {
-        paymentStatus: status,
-        paidAt: status === 'paid' ? serverTimestamp() : null,
-        updatedAt: serverTimestamp()
+        const orderData = orderDoc.data();
+        
+        // Update order
+        transaction.update(orderRef, {
+          paymentStatus: status,
+          paidAt: status === 'paid' ? serverTimestamp() : null,
+          updatedAt: serverTimestamp()
+        });
+
+        // Update group order if exists
+        if (orderData.groupOrderId) {
+          await this.updateParticipantPaymentStatus(
+            orderData.groupOrderId,
+            orderData.userId,
+            orderId,
+            status
+          );
+        }
+
+        return true;
       });
-
-      // Update group order
-      if (orderData.groupOrderId) {
-        await this.updateParticipantPaymentStatus(
-          orderData.groupOrderId,
-          orderData.userId,
-          orderId,
-          status
-        );
-      }
-
-      return true;
     } catch (error) {
       console.error('❌ Error updating payment:', error);
       throw error;
     }
   },
 
-  // Update participant payment - FIXED
+  /**
+   * Update participant payment status in group order
+   */
   async updateParticipantPaymentStatus(groupOrderId, userId, orderId, status) {
     try {
       const groupOrderRef = doc(db, 'groupOrders', groupOrderId);
@@ -506,7 +558,7 @@ export const orderService = {
       
       if (!groupOrderDoc.exists()) {
         console.log('⚠️ Group order not found');
-        return;
+        return false;
       }
 
       const groupOrderData = groupOrderDoc.data();
@@ -524,39 +576,39 @@ export const orderService = {
         return p;
       });
 
+      // Calculate paid count
+      const paidCount = updatedParticipants.filter(p => p.paymentStatus === 'paid').length;
+      const totalCount = updatedParticipants.length;
+      const allPaid = paidCount === totalCount && totalCount > 0;
+
+      // Determine new status
+      let newStatus = groupOrderData.status;
+      if (allPaid) {
+        newStatus = 'confirmed';
+      } else if (paidCount > 0) {
+        newStatus = 'active';
+      }
+
       // Update group order
       await updateDoc(groupOrderRef, {
         participants: updatedParticipants,
+        status: newStatus,
+        ...(allPaid && { confirmedAt: serverTimestamp() }),
         updatedAt: serverTimestamp()
       });
 
-      console.log('✅ Participant payment updated');
-
-      // Check if all paid
-      const paidCount = updatedParticipants.filter(p => p.paymentStatus === 'paid').length;
-      const allPaid = paidCount === updatedParticipants.length && updatedParticipants.length > 0;
-
-      if (allPaid) {
-        await updateDoc(groupOrderRef, {
-          status: 'confirmed',
-          confirmedAt: serverTimestamp()
-        });
-        console.log('🎉 All participants paid! Order confirmed');
-      } else if (paidCount > 0) {
-        await updateDoc(groupOrderRef, {
-          status: 'active'
-        });
-        console.log(`✅ ${paidCount}/${updatedParticipants.length} paid - Order active`);
-      }
+      console.log(`✅ Group order updated: ${paidCount}/${totalCount} paid, status: ${newStatus}`);
 
       return true;
     } catch (error) {
       console.error('❌ Error updating participant payment:', error);
-      throw error;
+      return false;
     }
   },
 
-  // Get group order details - FIXED
+  /**
+   * Get group order details
+   */
   async getGroupOrderDetails(groupOrderId) {
     try {
       const groupOrderRef = doc(db, 'groupOrders', groupOrderId);
@@ -576,7 +628,9 @@ export const orderService = {
     }
   },
 
-  // Get user orders - FIXED (no index required)
+  /**
+   * Get user orders with sorting
+   */
   async getUserOrders(userId) {
     try {
       const ordersQuery = query(
@@ -590,7 +644,7 @@ export const orderService = {
         ...doc.data()
       }));
       
-      // Sort client-side
+      // Sort client-side by creation date (newest first)
       return orders.sort((a, b) => {
         const aTime = a.createdAt?.seconds || 0;
         const bTime = b.createdAt?.seconds || 0;
@@ -602,13 +656,17 @@ export const orderService = {
     }
   },
 
-  // Subscribe to group order
+  /**
+   * Subscribe to group order updates
+   */
   subscribeToGroupOrder(groupOrderId, callback) {
     const groupOrderRef = doc(db, 'groupOrders', groupOrderId);
     return onSnapshot(groupOrderRef, (doc) => {
       if (doc.exists()) {
         callback({ id: doc.id, ...doc.data() });
       }
+    }, (error) => {
+      console.error('Error in group order subscription:', error);
     });
   }
 };
@@ -616,8 +674,17 @@ export const orderService = {
 // ============================================
 // HELPER FUNCTIONS
 // ============================================
+
+/**
+ * Calculate distance between two coordinates
+ * @param {number} lat1 - Latitude 1
+ * @param {number} lon1 - Longitude 1
+ * @param {number} lat2 - Latitude 2
+ * @param {number} lon2 - Longitude 2
+ * @returns {number} Distance in kilometers
+ */
 function calculateDistance(lat1, lon1, lat2, lon2) {
-  const R = 6371;
+  const R = 6371; // Earth's radius in kilometers
   const dLat = (lat2 - lat1) * Math.PI / 180;
   const dLon = (lon2 - lon1) * Math.PI / 180;
   const a = 
@@ -627,3 +694,10 @@ function calculateDistance(lat1, lon1, lat2, lon2) {
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
   return R * c;
 }
+
+// Export all services
+export default {
+  groupService,
+  productService,
+  orderService
+};

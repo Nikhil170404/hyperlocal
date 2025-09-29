@@ -1,11 +1,11 @@
-// src/pages/Cart.jsx - COMPLETELY FIXED
-import React, { useState, useEffect } from 'react';
+// src/pages/Cart.jsx - COMPLETELY FIXED & OPTIMIZED
+import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useCart } from '../contexts/CartContext';
 import { groupService, orderService } from '../services/groupService';
 import { paymentService } from '../services/paymentService';
-import { TrashIcon, MinusIcon, PlusIcon, UserGroupIcon, ShoppingBagIcon } from '@heroicons/react/24/outline';
+import { TrashIcon, MinusIcon, PlusIcon, UserGroupIcon, ShoppingBagIcon, ExclamationCircleIcon } from '@heroicons/react/24/outline';
 import toast from 'react-hot-toast';
 import LoadingSpinner from '../components/LoadingSpinner';
 
@@ -14,15 +14,41 @@ export default function Cart() {
   const [userGroups, setUserGroups] = useState([]);
   const [loadingGroups, setLoadingGroups] = useState(true);
   const [processingPayment, setProcessingPayment] = useState(false);
+  const [validationErrors, setValidationErrors] = useState([]);
+  
   const { currentUser, userProfile } = useAuth();
-  const { cartItems, updateQuantity, removeFromCart, getCartTotal, getRetailTotal, getTotalSavings, clearCart, incrementQuantity, decrementQuantity } = useCart();
+  const { 
+    cartItems, 
+    updateQuantity, 
+    removeFromCart, 
+    getCartTotal, 
+    getRetailTotal, 
+    getTotalSavings, 
+    clearCart, 
+    incrementQuantity, 
+    decrementQuantity 
+  } = useCart();
   const navigate = useNavigate();
 
+  // Fetch user groups on mount
   useEffect(() => {
     fetchUserGroups();
-  }, []);
+  }, [currentUser]);
 
+  // Validate cart and profile on changes
+  useEffect(() => {
+    validateCheckout();
+  }, [cartItems, selectedGroup, userProfile]);
+
+  /**
+   * Fetch user's groups
+   */
   const fetchUserGroups = async () => {
+    if (!currentUser) {
+      setLoadingGroups(false);
+      return;
+    }
+
     try {
       setLoadingGroups(true);
       const groups = await groupService.getUserGroups(currentUser.uid);
@@ -40,23 +66,52 @@ export default function Cart() {
     }
   };
 
+  /**
+   * Validate checkout requirements
+   */
+  const validateCheckout = useCallback(() => {
+    const errors = [];
+
+    // Check cart items
+    if (cartItems.length === 0) {
+      errors.push('Your cart is empty');
+    }
+
+    // Check group selection
+    if (!selectedGroup) {
+      errors.push('Please select a group');
+    }
+
+    // Check profile completion
+    if (!userProfile?.name) {
+      errors.push('Please complete your name in profile');
+    }
+    if (!userProfile?.email) {
+      errors.push('Please complete your email in profile');
+    }
+    if (!userProfile?.phone) {
+      errors.push('Please complete your phone number in profile');
+    }
+
+    setValidationErrors(errors);
+    return errors.length === 0;
+  }, [cartItems, selectedGroup, userProfile]);
+
+  /**
+   * Handle proceed to payment with complete error handling
+   */
   const handleProceedToPayment = async () => {
     console.log('🚀 Starting payment process...');
     
-    // Validation
-    if (!selectedGroup) {
-      toast.error('Please select a group to continue');
-      return;
-    }
-
-    if (cartItems.length === 0) {
-      toast.error('Your cart is empty');
-      return;
-    }
-
-    if (!userProfile?.name || !userProfile?.email || !userProfile?.phone) {
-      toast.error('Please complete your profile first');
-      navigate('/profile');
+    // Validate before proceeding
+    if (!validateCheckout()) {
+      const firstError = validationErrors[0];
+      toast.error(firstError);
+      
+      // Redirect to profile if needed
+      if (firstError.includes('profile')) {
+        setTimeout(() => navigate('/profile'), 2000);
+      }
       return;
     }
 
@@ -71,12 +126,23 @@ export default function Cart() {
         userName: userProfile.name,
         userEmail: userProfile.email,
         userPhone: userProfile.phone,
-        items: cartItems,
+        items: cartItems.map(item => ({
+          id: item.id,
+          name: item.name,
+          quantity: item.quantity,
+          groupPrice: item.groupPrice,
+          retailPrice: item.retailPrice,
+          minQuantity: item.minQuantity || 1
+        })),
         totalAmount: getTotal(),
         paymentStatus: 'pending'
       };
 
-      console.log('Order data:', orderData);
+      console.log('Order data:', {
+        ...orderData,
+        itemCount: orderData.items.length,
+        totalAmount: orderData.totalAmount
+      });
 
       // Create individual order
       const orderId = await orderService.createIndividualOrder(
@@ -84,11 +150,19 @@ export default function Cart() {
         orderData
       );
 
+      if (!orderId) {
+        throw new Error('Failed to create order');
+      }
+
       console.log('✅ Order created:', orderId);
 
       // Get group order ID
       const groupOrderId = await orderService.getOrCreateActiveGroupOrder(selectedGroup.id);
       
+      if (!groupOrderId) {
+        throw new Error('Failed to create group order');
+      }
+
       console.log('✅ Group order ID:', groupOrderId);
 
       // Prepare payment data
@@ -103,32 +177,53 @@ export default function Cart() {
         amount: getTotal()
       };
 
-      console.log('💳 Initiating payment with data:', paymentData);
+      console.log('💳 Initiating payment...');
 
       // Initiate Razorpay payment
       const result = await paymentService.initiatePayment(paymentData);
 
       if (result.success) {
         console.log('✅ Payment initiated successfully');
-        // Note: Cart will be cleared after successful payment in payment service
+        // Cart will be cleared after successful payment
+        // The payment service handles redirect
       } else {
-        console.error('❌ Payment initiation failed:', result.error);
-        toast.error('Failed to initiate payment');
+        throw new Error(result.error || 'Failed to initiate payment');
       }
 
     } catch (error) {
       console.error('❌ Error in payment process:', error);
-      toast.error(error.message || 'Failed to process order. Please try again.');
+      
+      // Show user-friendly error
+      const errorMessage = error.message || 'Failed to process order';
+      toast.error(errorMessage, { duration: 5000 });
+      
+      // Log for debugging
+      console.error('Payment error details:', {
+        message: error.message,
+        stack: error.stack,
+        userProfile: {
+          name: userProfile?.name,
+          email: userProfile?.email,
+          phone: userProfile?.phone
+        },
+        selectedGroup: selectedGroup?.id,
+        cartItemsCount: cartItems.length
+      });
+
     } finally {
       setProcessingPayment(false);
     }
   };
 
+  /**
+   * Calculate final total with delivery fee
+   */
   const getTotal = () => {
-    const deliveryFee = 30;
-    return getCartTotal() + deliveryFee;
+    const DELIVERY_FEE = 30;
+    return getCartTotal() + DELIVERY_FEE;
   };
 
+  // Empty cart state
   if (cartItems.length === 0) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-gray-50 to-green-50 px-4 py-8">
@@ -154,9 +249,15 @@ export default function Cart() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-green-50 px-3 sm:px-4 py-6 sm:py-8">
       <div className="max-w-7xl mx-auto">
-        <h1 className="text-2xl sm:text-3xl lg:text-4xl font-bold bg-gradient-to-r from-green-600 to-emerald-600 bg-clip-text text-transparent mb-6 sm:mb-8">
-          Shopping Cart
-        </h1>
+        {/* Header */}
+        <div className="mb-6 sm:mb-8">
+          <h1 className="text-2xl sm:text-3xl lg:text-4xl font-bold bg-gradient-to-r from-green-600 to-emerald-600 bg-clip-text text-transparent mb-2">
+            Shopping Cart
+          </h1>
+          <p className="text-sm sm:text-base text-gray-600">
+            {cartItems.length} {cartItems.length === 1 ? 'item' : 'items'} in your cart
+          </p>
+        </div>
 
         <div className="grid lg:grid-cols-3 gap-4 sm:gap-6">
           {/* Cart Items */}
@@ -182,7 +283,9 @@ export default function Cart() {
               </h3>
               
               {loadingGroups ? (
-                <LoadingSpinner size="small" />
+                <div className="py-4">
+                  <LoadingSpinner size="small" />
+                </div>
               ) : userGroups.length > 0 ? (
                 <div className="space-y-2 sm:space-y-3">
                   {userGroups.map((group) => (
@@ -213,10 +316,11 @@ export default function Cart() {
                 </div>
               ) : (
                 <div className="text-center py-4">
+                  <ExclamationCircleIcon className="h-12 w-12 text-gray-400 mx-auto mb-2" />
                   <p className="text-sm sm:text-base text-gray-600 mb-4">You're not in any groups yet</p>
                   <button
                     onClick={() => navigate('/groups')}
-                    className="text-sm sm:text-base text-green-600 font-semibold hover:text-green-700"
+                    className="text-sm sm:text-base text-green-600 font-semibold hover:text-green-700 underline"
                   >
                     Join a Group →
                   </button>
@@ -258,11 +362,28 @@ export default function Cart() {
                 <p className="text-2xl sm:text-3xl font-bold text-green-600">₹{getTotalSavings()}</p>
                 <p className="text-xs sm:text-sm text-green-700 mt-1">vs retail prices</p>
               </div>
+
+              {/* Validation Errors */}
+              {validationErrors.length > 0 && (
+                <div className="bg-red-50 border-l-4 border-red-500 p-3 mb-4 rounded">
+                  <div className="flex items-start">
+                    <ExclamationCircleIcon className="h-5 w-5 text-red-500 mr-2 flex-shrink-0 mt-0.5" />
+                    <div className="text-sm text-red-700">
+                      <p className="font-semibold mb-1">Cannot proceed:</p>
+                      <ul className="list-disc list-inside space-y-1">
+                        {validationErrors.map((error, index) => (
+                          <li key={index}>{error}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  </div>
+                </div>
+              )}
               
               {/* Payment Button */}
               <button
                 onClick={handleProceedToPayment}
-                disabled={!selectedGroup || processingPayment}
+                disabled={processingPayment || validationErrors.length > 0}
                 className="w-full py-3 sm:py-4 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-xl font-bold text-base sm:text-lg hover:shadow-xl transform hover:-translate-y-0.5 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none flex items-center justify-center gap-2"
               >
                 {processingPayment ? (
@@ -278,9 +399,9 @@ export default function Cart() {
                 )}
               </button>
 
-              {!selectedGroup && (
+              {validationErrors.length > 0 && (
                 <p className="text-center text-xs sm:text-sm text-red-600 mt-3">
-                  Please select a group to continue
+                  Please fix the errors above to continue
                 </p>
               )}
             </div>
@@ -291,6 +412,9 @@ export default function Cart() {
   );
 }
 
+/**
+ * Cart Item Component
+ */
 function CartItem({ item, onIncrement, onDecrement, onRemove }) {
   const savings = (item.retailPrice - item.groupPrice) * item.quantity;
   const discount = Math.round(((item.retailPrice - item.groupPrice) / item.retailPrice) * 100);
@@ -298,6 +422,7 @@ function CartItem({ item, onIncrement, onDecrement, onRemove }) {
   return (
     <div className="bg-white rounded-xl sm:rounded-2xl shadow-lg p-3 sm:p-4 lg:p-6 hover:shadow-xl transition-shadow">
       <div className="flex gap-3 sm:gap-4">
+        {/* Image */}
         <div className="w-20 h-20 sm:w-24 sm:h-24 bg-gradient-to-br from-gray-100 to-gray-200 rounded-lg sm:rounded-xl flex items-center justify-center flex-shrink-0">
           {item.imageUrl ? (
             <img src={item.imageUrl} alt={item.name} className="w-full h-full object-cover rounded-lg sm:rounded-xl" />
@@ -306,6 +431,7 @@ function CartItem({ item, onIncrement, onDecrement, onRemove }) {
           )}
         </div>
         
+        {/* Details */}
         <div className="flex-1 min-w-0">
           <div className="flex justify-between items-start mb-2 sm:mb-3 gap-2">
             <div className="flex-1 min-w-0">
@@ -319,11 +445,13 @@ function CartItem({ item, onIncrement, onDecrement, onRemove }) {
             <button
               onClick={onRemove}
               className="p-1.5 sm:p-2 hover:bg-red-50 rounded-lg text-red-600 transition flex-shrink-0"
+              aria-label="Remove item"
             >
               <TrashIcon className="h-4 w-4 sm:h-5 sm:w-5" />
             </button>
           </div>
 
+          {/* Pricing */}
           <div className="space-y-1.5 sm:space-y-2">
             <div className="flex items-center gap-2 sm:gap-3">
               <span className="text-xs sm:text-sm text-gray-500 line-through">₹{item.retailPrice}</span>
@@ -331,11 +459,13 @@ function CartItem({ item, onIncrement, onDecrement, onRemove }) {
               <span className="text-xs sm:text-sm text-green-700 font-medium">Save ₹{item.retailPrice - item.groupPrice}</span>
             </div>
 
+            {/* Quantity Controls */}
             <div className="flex items-center justify-between gap-2 sm:gap-3">
               <div className="flex items-center gap-2 sm:gap-3 bg-gray-100 rounded-lg sm:rounded-xl p-1 sm:p-2">
                 <button
                   onClick={onDecrement}
                   className="p-1 sm:p-1.5 hover:bg-white rounded-md transition"
+                  aria-label="Decrease quantity"
                 >
                   <MinusIcon className="h-3 w-3 sm:h-4 sm:w-4" />
                 </button>
@@ -343,6 +473,7 @@ function CartItem({ item, onIncrement, onDecrement, onRemove }) {
                 <button
                   onClick={onIncrement}
                   className="p-1 sm:p-1.5 hover:bg-white rounded-md transition"
+                  aria-label="Increase quantity"
                 >
                   <PlusIcon className="h-3 w-3 sm:h-4 sm:w-4" />
                 </button>
