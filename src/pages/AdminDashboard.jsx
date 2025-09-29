@@ -1,13 +1,11 @@
-// src/pages/AdminDashboard.jsx - Updated with Data Upload
+// src/pages/AdminDashboard.jsx - ENHANCED WITH ANALYTICS
 import React, { useState, useEffect } from 'react';
 import { 
   collection, 
   getDocs, 
   query, 
   orderBy, 
-  where,
-  serverTimestamp,
-  addDoc 
+  where
 } from 'firebase/firestore';
 import { db } from '../config/firebase';
 import { productService } from '../services/groupService';
@@ -19,7 +17,11 @@ import {
   CurrencyRupeeIcon,
   PlusIcon,
   ChartBarIcon,
-  ArrowUpTrayIcon
+  ArrowUpTrayIcon,
+  CheckCircleIcon,
+  XCircleIcon,
+  ClockIcon,
+  TruckIcon
 } from '@heroicons/react/24/outline';
 
 export default function AdminDashboard() {
@@ -29,6 +31,7 @@ export default function AdminDashboard() {
     totalOrders: 0,
     totalRevenue: 0
   });
+  const [analytics, setAnalytics] = useState(null);
   const [recentOrders, setRecentOrders] = useState([]);
   const [activeTab, setActiveTab] = useState('overview');
   const [loading, setLoading] = useState(true);
@@ -41,10 +44,10 @@ export default function AdminDashboard() {
     try {
       setLoading(true);
       
-      // Fetch users count
+      // Fetch users
       const usersSnapshot = await getDocs(collection(db, 'users'));
       
-      // Fetch groups count
+      // Fetch groups
       const groupsSnapshot = await getDocs(collection(db, 'groups'));
       
       // Fetch orders
@@ -69,10 +72,87 @@ export default function AdminDashboard() {
       });
       
       setRecentOrders(orders.slice(0, 10));
+      
+      // Calculate analytics
+      await calculateAnalytics(orders);
     } catch (error) {
       console.error('Error fetching dashboard data:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const calculateAnalytics = async (orders) => {
+    try {
+      // Order Success Rate
+      const totalOrders = orders.length;
+      const successfulOrders = orders.filter(o => o.status === 'confirmed' || o.status === 'delivered').length;
+      const orderSuccessRate = totalOrders > 0 ? (successfulOrders / totalOrders) * 100 : 0;
+
+      // Payment Collection Rate
+      const paidOrders = orders.reduce((count, order) => {
+        const paidParticipants = (order.participants || []).filter(p => p.paymentStatus === 'paid').length;
+        return count + paidParticipants;
+      }, 0);
+      const totalParticipants = orders.reduce((count, order) => {
+        return count + (order.participants?.length || 0);
+      }, 0);
+      const paymentCollectionRate = totalParticipants > 0 ? (paidOrders / totalParticipants) * 100 : 0;
+
+      // Repeat Order Rate
+      const usersSnapshot = await getDocs(collection(db, 'users'));
+      const userOrders = {};
+      orders.forEach(order => {
+        (order.participants || []).forEach(p => {
+          userOrders[p.userId] = (userOrders[p.userId] || 0) + 1;
+        });
+      });
+      const repeatCustomers = Object.values(userOrders).filter(count => count > 1).length;
+      const repeatOrderRate = usersSnapshot.size > 0 ? (repeatCustomers / usersSnapshot.size) * 100 : 0;
+
+      // Product-wise demand
+      const productDemand = {};
+      orders.forEach(order => {
+        Object.entries(order.productQuantities || {}).forEach(([productId, data]) => {
+          if (!productDemand[productId]) {
+            productDemand[productId] = {
+              name: data.name,
+              totalQuantity: 0,
+              totalOrders: 0,
+              revenue: 0
+            };
+          }
+          productDemand[productId].totalQuantity += data.quantity;
+          productDemand[productId].totalOrders += 1;
+          productDemand[productId].revenue += data.quantity * data.price;
+        });
+      });
+
+      const topProducts = Object.entries(productDemand)
+        .sort((a, b) => b[1].totalQuantity - a[1].totalQuantity)
+        .slice(0, 10);
+
+      // Minimum quantity achievement rate
+      const minQuantityMet = orders.filter(o => o.minQuantityMet).length;
+      const minQuantityAchievementRate = totalOrders > 0 ? (minQuantityMet / totalOrders) * 100 : 0;
+
+      // Average order value
+      const avgOrderValue = totalOrders > 0 ? orders.reduce((sum, o) => sum + (o.totalAmount || 0), 0) / totalOrders : 0;
+
+      setAnalytics({
+        orderSuccessRate,
+        paymentCollectionRate,
+        repeatOrderRate,
+        minQuantityAchievementRate,
+        avgOrderValue,
+        topProducts,
+        totalOrders,
+        successfulOrders,
+        paidOrders,
+        totalParticipants
+      });
+    } catch (error) {
+      console.error('Error calculating analytics:', error);
     }
   };
 
@@ -86,6 +166,7 @@ export default function AdminDashboard() {
 
   const tabs = [
     { id: 'overview', label: 'Overview', icon: ChartBarIcon },
+    { id: 'analytics', label: 'Analytics', icon: ChartBarIcon },
     { id: 'products', label: 'Products', icon: ShoppingBagIcon },
     { id: 'orders', label: 'Orders', icon: ShoppingBagIcon },
     { id: 'users', label: 'Users', icon: UserGroupIcon },
@@ -93,435 +174,353 @@ export default function AdminDashboard() {
   ];
 
   return (
-    <div className="container mx-auto px-4 py-8">
-      <h1 className="text-3xl font-bold text-gray-800 mb-8">Admin Dashboard</h1>
+    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-green-50 px-4 py-8">
+      <div className="max-w-7xl mx-auto">
+        <h1 className="text-4xl font-bold bg-gradient-to-r from-green-600 to-emerald-600 bg-clip-text text-transparent mb-8">
+          Admin Dashboard
+        </h1>
 
-      {/* Stats Cards */}
-      <div className="grid md:grid-cols-4 gap-6 mb-8">
-        <StatsCard
-          title="Total Users"
-          value={stats.totalUsers}
-          icon={UserGroupIcon}
-          color="blue"
-        />
-        <StatsCard
-          title="Active Groups"
-          value={stats.totalGroups}
-          icon={UserGroupIcon}
-          color="green"
-        />
-        <StatsCard
-          title="Total Orders"
-          value={stats.totalOrders}
-          icon={ShoppingBagIcon}
-          color="purple"
-        />
-        <StatsCard
-          title="Revenue"
-          value={`₹${stats.totalRevenue.toLocaleString()}`}
-          icon={CurrencyRupeeIcon}
-          color="yellow"
-        />
+        {/* Stats Cards */}
+        <div className="grid md:grid-cols-4 gap-6 mb-8">
+          <StatsCard
+            title="Total Users"
+            value={stats.totalUsers}
+            icon={UserGroupIcon}
+            color="blue"
+          />
+          <StatsCard
+            title="Active Groups"
+            value={stats.totalGroups}
+            icon={UserGroupIcon}
+            color="green"
+          />
+          <StatsCard
+            title="Total Orders"
+            value={stats.totalOrders}
+            icon={ShoppingBagIcon}
+            color="purple"
+          />
+          <StatsCard
+            title="Revenue"
+            value={`₹${stats.totalRevenue.toLocaleString()}`}
+            icon={CurrencyRupeeIcon}
+            color="yellow"
+          />
+        </div>
+
+        {/* Tabs */}
+        <div className="border-b border-gray-200 mb-6">
+          <nav className="flex space-x-8 overflow-x-auto">
+            {tabs.map((tab) => {
+              const Icon = tab.icon;
+              return (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id)}
+                  className={`flex items-center gap-2 py-2 px-1 border-b-2 font-medium text-sm whitespace-nowrap ${
+                    activeTab === tab.id
+                      ? 'border-green-500 text-green-600'
+                      : 'border-transparent text-gray-500 hover:text-gray-700'
+                  }`}
+                >
+                  <Icon className="h-5 w-5" />
+                  <span>{tab.label}</span>
+                </button>
+              );
+            })}
+          </nav>
+        </div>
+
+        {/* Tab Content */}
+        {activeTab === 'overview' && (
+          <OverviewTab recentOrders={recentOrders} analytics={analytics} />
+        )}
+
+        {activeTab === 'analytics' && analytics && (
+          <AnalyticsTab analytics={analytics} />
+        )}
+
+        {activeTab === 'products' && <ProductsManagement />}
+        {activeTab === 'orders' && <OrdersManagement orders={recentOrders} />}
+        {activeTab === 'users' && <UsersManagement />}
+        {activeTab === 'data-upload' && <DataUploadAdmin />}
+      </div>
+    </div>
+  );
+}
+
+// Overview Tab
+function OverviewTab({ recentOrders, analytics }) {
+  return (
+    <div className="grid lg:grid-cols-2 gap-8">
+      {/* Recent Orders */}
+      <div className="bg-white rounded-2xl shadow-xl p-6">
+        <h3 className="text-xl font-semibold mb-4">Recent Orders</h3>
+        <div className="space-y-4">
+          {recentOrders.length > 0 ? (
+            recentOrders.map((order) => (
+              <div key={order.id} className="flex justify-between items-center p-3 border border-gray-200 rounded-lg hover:shadow-md transition">
+                <div>
+                  <p className="font-medium">Order #{order.id.slice(-6)}</p>
+                  <p className="text-sm text-gray-600">
+                    {order.createdAt && new Date(order.createdAt.seconds * 1000).toLocaleDateString()}
+                  </p>
+                </div>
+                <div className="text-right">
+                  <p className="font-bold">₹{order.totalAmount}</p>
+                  <span className={`px-2 py-1 rounded-full text-xs ${getStatusColor(order.status)}`}>
+                    {order.status}
+                  </span>
+                </div>
+              </div>
+            ))
+          ) : (
+            <p className="text-gray-500 text-center py-4">No orders yet</p>
+          )}
+        </div>
       </div>
 
-      {/* Tabs */}
-      <div className="border-b border-gray-200 mb-6">
-        <nav className="flex space-x-8 overflow-x-auto">
-          {tabs.map((tab) => {
-            const Icon = tab.icon;
-            return (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
-                className={`flex items-center gap-2 py-2 px-1 border-b-2 font-medium text-sm whitespace-nowrap ${
-                  activeTab === tab.id
-                    ? 'border-green-500 text-green-600'
-                    : 'border-transparent text-gray-500 hover:text-gray-700'
-                }`}
-              >
-                <Icon className="h-5 w-5" />
-                <span>{tab.label}</span>
-              </button>
-            );
-          })}
-        </nav>
-      </div>
-
-      {/* Tab Content */}
-      {activeTab === 'overview' && (
-        <div className="grid lg:grid-cols-2 gap-8">
-          {/* Recent Orders */}
-          <div className="bg-white rounded-lg shadow p-6">
-            <h3 className="text-xl font-semibold mb-4">Recent Orders</h3>
-            <div className="space-y-4">
-              {recentOrders.length > 0 ? (
-                recentOrders.map((order) => (
-                  <div key={order.id} className="flex justify-between items-center p-3 border border-gray-200 rounded-lg">
-                    <div>
-                      <p className="font-medium">Order #{order.id.slice(-6)}</p>
-                      <p className="text-sm text-gray-600">
-                        {order.createdAt && new Date(order.createdAt.seconds * 1000).toLocaleDateString()}
-                      </p>
-                    </div>
-                    <div className="text-right">
-                      <p className="font-bold">₹{order.totalAmount}</p>
-                      <span className={`px-2 py-1 rounded-full text-xs ${getStatusColor(order.status)}`}>
-                        {order.status}
-                      </span>
-                    </div>
-                  </div>
-                ))
-              ) : (
-                <p className="text-gray-500 text-center py-4">No orders yet</p>
-              )}
-            </div>
-          </div>
-
-          {/* Quick Actions */}
-          <div className="bg-white rounded-lg shadow p-6">
-            <h3 className="text-xl font-semibold mb-4">Quick Actions</h3>
-            <div className="space-y-3">
-              <button
-                onClick={() => setActiveTab('products')}
-                className="w-full flex items-center justify-between p-3 border border-gray-200 rounded-lg hover:bg-gray-50 transition"
-              >
-                <div className="flex items-center space-x-3">
-                  <PlusIcon className="h-5 w-5 text-green-600" />
-                  <span>Add New Product</span>
-                </div>
-                <span className="text-gray-400">→</span>
-              </button>
-              
-              <button
-                onClick={() => setActiveTab('data-upload')}
-                className="w-full flex items-center justify-between p-3 border border-gray-200 rounded-lg hover:bg-gray-50 transition"
-              >
-                <div className="flex items-center space-x-3">
-                  <ArrowUpTrayIcon className="h-5 w-5 text-blue-600" />
-                  <span>Upload Sample Data</span>
-                </div>
-                <span className="text-gray-400">→</span>
-              </button>
-              
-              <button className="w-full flex items-center justify-between p-3 border border-gray-200 rounded-lg hover:bg-gray-50 transition">
-                <div className="flex items-center space-x-3">
-                  <ChartBarIcon className="h-5 w-5 text-blue-600" />
-                  <span>View Analytics</span>
-                </div>
-                <span className="text-gray-400">→</span>
-              </button>
-              
-              <button
-                onClick={() => setActiveTab('orders')}
-                className="w-full flex items-center justify-between p-3 border border-gray-200 rounded-lg hover:bg-gray-50 transition"
-              >
-                <div className="flex items-center space-x-3">
-                  <ShoppingBagIcon className="h-5 w-5 text-purple-600" />
-                  <span>Manage Orders</span>
-                </div>
-                <span className="text-gray-400">→</span>
-              </button>
-            </div>
+      {/* Quick Stats */}
+      {analytics && (
+        <div className="bg-white rounded-2xl shadow-xl p-6">
+          <h3 className="text-xl font-semibold mb-4">Quick Stats</h3>
+          <div className="space-y-4">
+            <QuickStat
+              label="Order Success Rate"
+              value={`${analytics.orderSuccessRate.toFixed(1)}%`}
+              icon={CheckCircleIcon}
+              color="green"
+            />
+            <QuickStat
+              label="Payment Collection"
+              value={`${analytics.paymentCollectionRate.toFixed(1)}%`}
+              icon={CurrencyRupeeIcon}
+              color="blue"
+            />
+            <QuickStat
+              label="Repeat Customers"
+              value={`${analytics.repeatOrderRate.toFixed(1)}%`}
+              icon={UserGroupIcon}
+              color="purple"
+            />
+            <QuickStat
+              label="Min Qty Achievement"
+              value={`${analytics.minQuantityAchievementRate.toFixed(1)}%`}
+              icon={ChartBarIcon}
+              color="orange"
+            />
           </div>
         </div>
       )}
-
-      {activeTab === 'products' && <ProductsManagement />}
-      {activeTab === 'orders' && <OrdersManagement />}
-      {activeTab === 'users' && <UsersManagement />}
-      {activeTab === 'data-upload' && <DataUploadAdmin />}
     </div>
   );
 }
 
-function StatsCard({ title, value, icon: Icon, color }) {
-  const colorClasses = {
-    blue: 'bg-blue-100 text-blue-600',
-    green: 'bg-green-100 text-green-600',
-    purple: 'bg-purple-100 text-purple-600',
-    yellow: 'bg-yellow-100 text-yellow-600'
-  };
-
+// Analytics Tab
+function AnalyticsTab({ analytics }) {
   return (
-    <div className="bg-white rounded-lg shadow p-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="text-sm text-gray-600">{title}</p>
-          <p className="text-2xl font-bold text-gray-800">{value}</p>
+    <div className="space-y-8">
+      {/* Key Metrics */}
+      <div className="grid md:grid-cols-3 gap-6">
+        <MetricCard
+          title="Order Success Rate"
+          value={`${analytics.orderSuccessRate.toFixed(1)}%`}
+          subtitle={`${analytics.successfulOrders} of ${analytics.totalOrders} orders`}
+          color="green"
+        />
+        <MetricCard
+          title="Payment Collection"
+          value={`${analytics.paymentCollectionRate.toFixed(1)}%`}
+          subtitle={`${analytics.paidOrders} of ${analytics.totalParticipants} participants`}
+          color="blue"
+        />
+        <MetricCard
+          title="Average Order Value"
+          value={`₹${analytics.avgOrderValue.toFixed(0)}`}
+          subtitle="Per order"
+          color="purple"
+        />
+      </div>
+
+      {/* Top Products */}
+      <div className="bg-white rounded-2xl shadow-xl p-6">
+        <h3 className="text-2xl font-bold mb-6">Top Performing Products</h3>
+        <div className="space-y-4">
+          {analytics.topProducts.map(([productId, data], index) => (
+            <div key={productId} className="flex items-center gap-4">
+              <div className="flex items-center justify-center w-10 h-10 rounded-full bg-gradient-to-br from-green-500 to-emerald-600 text-white font-bold">
+                {index + 1}
+              </div>
+              <div className="flex-1">
+                <p className="font-semibold text-gray-800">{data.name}</p>
+                <p className="text-sm text-gray-600">
+                  {data.totalQuantity} units • {data.totalOrders} orders • ₹{data.revenue.toLocaleString()}
+                </p>
+              </div>
+              <div className="text-right">
+                <div className="w-48 bg-gray-200 rounded-full h-2">
+                  <div 
+                    className="bg-gradient-to-r from-green-600 to-emerald-600 h-2 rounded-full"
+                    style={{ width: `${(data.totalQuantity / analytics.topProducts[0][1].totalQuantity) * 100}%` }}
+                  />
+                </div>
+              </div>
+            </div>
+          ))}
         </div>
-        <div className={`p-3 rounded-lg ${colorClasses[color]}`}>
-          <Icon className="h-6 w-6" />
-        </div>
+      </div>
+
+      {/* Performance Indicators */}
+      <div className="grid md:grid-cols-2 gap-6">
+        <PerformanceCard
+          title="Min Quantity Achievement"
+          value={`${analytics.minQuantityAchievementRate.toFixed(1)}%`}
+          description="Orders meeting minimum quantity requirements"
+        />
+        <PerformanceCard
+          title="Repeat Customer Rate"
+          value={`${analytics.repeatOrderRate.toFixed(1)}%`}
+          description="Customers with multiple orders"
+        />
       </div>
     </div>
   );
 }
 
+// Products Management (placeholder)
 function ProductsManagement() {
-  const [products, setProducts] = useState([]);
-  const [showAddForm, setShowAddForm] = useState(false);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    fetchProducts();
-  }, []);
-
-  const fetchProducts = async () => {
-    try {
-      const productsData = await productService.getProducts();
-      setProducts(productsData);
-    } catch (error) {
-      console.error('Error fetching products:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  if (loading) {
-    return <LoadingSpinner size="large" />;
-  }
-
   return (
-    <div>
-      <div className="flex justify-between items-center mb-6">
-        <h3 className="text-xl font-semibold">Products Management</h3>
-        <button
-          onClick={() => setShowAddForm(true)}
-          className="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition flex items-center space-x-2"
-        >
-          <PlusIcon className="h-5 w-5" />
-          <span>Add Product</span>
-        </button>
-      </div>
+    <div className="bg-white rounded-2xl shadow-xl p-6">
+      <h3 className="text-xl font-semibold mb-6">Products Management</h3>
+      <p className="text-gray-500 text-center py-8">Products management interface - See Products tab for full implementation</p>
+    </div>
+  );
+}
 
-      <div className="bg-white rounded-lg shadow overflow-hidden">
+// Orders Management
+function OrdersManagement({ orders }) {
+  return (
+    <div className="bg-white rounded-2xl shadow-xl p-6">
+      <h3 className="text-xl font-semibold mb-6">Orders Management</h3>
+      <div className="overflow-x-auto">
         <table className="w-full">
           <thead className="bg-gray-50">
             <tr>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Product
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Category
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Retail Price
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Group Price
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Actions
-              </th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Order ID</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Participants</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Amount</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
             </tr>
           </thead>
           <tbody className="bg-white divide-y divide-gray-200">
-            {products.length > 0 ? (
-              products.map((product) => (
-                <tr key={product.id}>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <div>
-                      <div className="text-sm font-medium text-gray-900">{product.name}</div>
-                      <div className="text-sm text-gray-500">{product.description}</div>
-                    </div>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 capitalize">
-                    {product.category}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                    ₹{product.retailPrice}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                    ₹{product.groupPrice}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                    <button className="text-green-600 hover:text-green-700 mr-3">Edit</button>
-                    <button className="text-red-600 hover:text-red-700">Delete</button>
-                  </td>
-                </tr>
-              ))
-            ) : (
-              <tr>
-                <td colSpan="5" className="px-6 py-8 text-center text-gray-500">
-                  No products found. Upload sample data or add products manually.
+            {orders.map((order) => (
+              <tr key={order.id} className="hover:bg-gray-50">
+                <td className="px-6 py-4 text-sm">#{order.id.slice(-6)}</td>
+                <td className="px-6 py-4 text-sm">
+                  {order.createdAt && new Date(order.createdAt.seconds * 1000).toLocaleDateString()}
+                </td>
+                <td className="px-6 py-4 text-sm">{order.participants?.length || 0}</td>
+                <td className="px-6 py-4 text-sm font-semibold">₹{order.totalAmount}</td>
+                <td className="px-6 py-4">
+                  <span className={`px-3 py-1 rounded-full text-xs font-semibold ${getStatusColor(order.status)}`}>
+                    {order.status}
+                  </span>
                 </td>
               </tr>
-            )}
+            ))}
           </tbody>
         </table>
       </div>
-
-      {showAddForm && (
-        <AddProductModal
-          onClose={() => setShowAddForm(false)}
-          onSuccess={() => {
-            setShowAddForm(false);
-            fetchProducts();
-          }}
-        />
-      )}
     </div>
   );
 }
 
-function AddProductModal({ onClose, onSuccess }) {
-  const [formData, setFormData] = useState({
-    name: '',
-    description: '',
-    category: 'groceries',
-    retailPrice: '',
-    groupPrice: '',
-    unit: 'kg',
-    minQuantity: '10'
-  });
-  const [loading, setLoading] = useState(false);
+// Users Management (placeholder)
+function UsersManagement() {
+  return (
+    <div className="bg-white rounded-2xl shadow-xl p-6">
+      <h3 className="text-xl font-semibold mb-6">Users Management</h3>
+      <p className="text-gray-500 text-center py-8">Users management interface coming soon...</p>
+    </div>
+  );
+}
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setLoading(true);
-
-    try {
-      await productService.addProduct({
-        ...formData,
-        retailPrice: parseFloat(formData.retailPrice),
-        groupPrice: parseFloat(formData.groupPrice),
-        minQuantity: parseInt(formData.minQuantity)
-      });
-      onSuccess();
-    } catch (error) {
-      console.error('Error adding product:', error);
-    } finally {
-      setLoading(false);
-    }
+// Helper Components
+function StatsCard({ title, value, icon: Icon, color }) {
+  const colorClasses = {
+    blue: 'from-blue-500 to-cyan-600',
+    green: 'from-green-500 to-emerald-600',
+    purple: 'from-purple-500 to-pink-600',
+    yellow: 'from-yellow-500 to-orange-600'
   };
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-lg p-6 w-full max-w-md mx-4">
-        <h2 className="text-2xl font-bold mb-4">Add New Product</h2>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Product Name
-            </label>
-            <input
-              type="text"
-              required
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-green-500 focus:border-green-500"
-              value={formData.name}
-              onChange={(e) => setFormData({...formData, name: e.target.value})}
-            />
-          </div>
-          
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Description
-            </label>
-            <textarea
-              required
-              rows={3}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-green-500 focus:border-green-500"
-              value={formData.description}
-              onChange={(e) => setFormData({...formData, description: e.target.value})}
-            />
-          </div>
-          
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Category
-            </label>
-            <select
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-green-500 focus:border-green-500"
-              value={formData.category}
-              onChange={(e) => setFormData({...formData, category: e.target.value})}
-            >
-              <option value="groceries">Groceries</option>
-              <option value="household">Household</option>
-              <option value="personal-care">Personal Care</option>
-              <option value="beverages">Beverages</option>
-            </select>
-          </div>
-          
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Retail Price (₹)
-              </label>
-              <input
-                type="number"
-                required
-                step="0.01"
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-green-500 focus:border-green-500"
-                value={formData.retailPrice}
-                onChange={(e) => setFormData({...formData, retailPrice: e.target.value})}
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Group Price (₹)
-              </label>
-              <input
-                type="number"
-                required
-                step="0.01"
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-green-500 focus:border-green-500"
-                value={formData.groupPrice}
-                onChange={(e) => setFormData({...formData, groupPrice: e.target.value})}
-              />
-            </div>
-          </div>
-          
-          <div className="flex space-x-4 pt-4">
-            <button
-              type="button"
-              onClick={onClose}
-              className="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={loading}
-              className="flex-1 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition disabled:opacity-50"
-            >
-              {loading ? <LoadingSpinner size="small" /> : 'Add Product'}
-            </button>
-          </div>
-        </form>
+    <div className="bg-white rounded-xl shadow-lg p-6 hover:shadow-xl transition">
+      <div className={`inline-flex p-3 bg-gradient-to-br ${colorClasses[color]} rounded-xl mb-3`}>
+        <Icon className="h-6 w-6 text-white" />
       </div>
+      <p className="text-sm text-gray-600 font-medium mb-1">{title}</p>
+      <p className="text-3xl font-bold text-gray-800">{value}</p>
     </div>
   );
 }
 
-function OrdersManagement() {
+function QuickStat({ label, value, icon: Icon, color }) {
+  const colorClasses = {
+    green: 'text-green-600 bg-green-50',
+    blue: 'text-blue-600 bg-blue-50',
+    purple: 'text-purple-600 bg-purple-50',
+    orange: 'text-orange-600 bg-orange-50'
+  };
+
   return (
-    <div>
-      <h3 className="text-xl font-semibold mb-6">Orders Management</h3>
-      <div className="bg-white rounded-lg shadow p-6">
-        <p className="text-gray-500 text-center py-8">Orders management interface coming soon...</p>
+    <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+      <div className="flex items-center gap-3">
+        <div className={`p-2 rounded-lg ${colorClasses[color]}`}>
+          <Icon className="h-5 w-5" />
+        </div>
+        <span className="text-sm font-medium text-gray-700">{label}</span>
       </div>
+      <span className="text-lg font-bold text-gray-900">{value}</span>
     </div>
   );
 }
 
-function UsersManagement() {
+function MetricCard({ title, value, subtitle, color }) {
+  const colorClasses = {
+    green: 'from-green-500 to-emerald-600',
+    blue: 'from-blue-500 to-cyan-600',
+    purple: 'from-purple-500 to-pink-600'
+  };
+
   return (
-    <div>
-      <h3 className="text-xl font-semibold mb-6">Users Management</h3>
-      <div className="bg-white rounded-lg shadow p-6">
-        <p className="text-gray-500 text-center py-8">Users management interface coming soon...</p>
-      </div>
+    <div className={`bg-gradient-to-br ${colorClasses[color]} text-white rounded-xl shadow-lg p-6`}>
+      <p className="text-sm font-medium opacity-90 mb-2">{title}</p>
+      <p className="text-4xl font-bold mb-1">{value}</p>
+      <p className="text-sm opacity-75">{subtitle}</p>
+    </div>
+  );
+}
+
+function PerformanceCard({ title, value, description }) {
+  return (
+    <div className="bg-white rounded-xl shadow-lg p-6 border-l-4 border-green-500">
+      <h4 className="text-lg font-semibold text-gray-800 mb-2">{title}</h4>
+      <p className="text-3xl font-bold text-green-600 mb-2">{value}</p>
+      <p className="text-sm text-gray-600">{description}</p>
     </div>
   );
 }
 
 function getStatusColor(status) {
-  switch (status) {
-    case 'collecting': return 'bg-yellow-100 text-yellow-800';
-    case 'confirmed': return 'bg-blue-100 text-blue-800';
-    case 'shipped': return 'bg-purple-100 text-purple-800';
-    case 'delivered': return 'bg-green-100 text-green-800';
-    case 'cancelled': return 'bg-red-100 text-red-800';
-    default: return 'bg-gray-100 text-gray-800';
-  }
+  const colors = {
+    collecting: 'bg-yellow-100 text-yellow-800',
+    active: 'bg-blue-100 text-blue-800',
+    confirmed: 'bg-green-100 text-green-800',
+    shipped: 'bg-purple-100 text-purple-800',
+    delivered: 'bg-green-100 text-green-800',
+    cancelled: 'bg-red-100 text-red-800'
+  };
+  return colors[status] || 'bg-gray-100 text-gray-800';
 }

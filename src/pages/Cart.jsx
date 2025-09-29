@@ -1,11 +1,11 @@
-// src/pages/Cart.jsx - COMPLETELY FIXED & OPTIMIZED
+// src/pages/Cart.jsx - ENHANCED WITH PROGRESS TRACKING
 import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useCart } from '../contexts/CartContext';
 import { groupService, orderService } from '../services/groupService';
 import { paymentService } from '../services/paymentService';
-import { TrashIcon, MinusIcon, PlusIcon, UserGroupIcon, ShoppingBagIcon, ExclamationCircleIcon } from '@heroicons/react/24/outline';
+import { TrashIcon, MinusIcon, PlusIcon, UserGroupIcon, ShoppingBagIcon, ExclamationCircleIcon, ClockIcon, SparklesIcon } from '@heroicons/react/24/outline';
 import toast from 'react-hot-toast';
 import LoadingSpinner from '../components/LoadingSpinner';
 
@@ -15,6 +15,9 @@ export default function Cart() {
   const [loadingGroups, setLoadingGroups] = useState(true);
   const [processingPayment, setProcessingPayment] = useState(false);
   const [validationErrors, setValidationErrors] = useState([]);
+  const [groupProgress, setGroupProgress] = useState({});
+  const [paymentDeadline, setPaymentDeadline] = useState(null);
+  const [isEarlyBird, setIsEarlyBird] = useState(false);
   
   const { currentUser, userProfile } = useAuth();
   const { 
@@ -30,19 +33,21 @@ export default function Cart() {
   } = useCart();
   const navigate = useNavigate();
 
-  // Fetch user groups on mount
   useEffect(() => {
     fetchUserGroups();
   }, [currentUser]);
 
-  // Validate cart and profile on changes
+  useEffect(() => {
+    if (selectedGroup) {
+      fetchGroupProgress();
+      calculatePaymentDeadline();
+    }
+  }, [selectedGroup, cartItems]);
+
   useEffect(() => {
     validateCheckout();
   }, [cartItems, selectedGroup, userProfile]);
 
-  /**
-   * Fetch user's groups
-   */
   const fetchUserGroups = async () => {
     if (!currentUser) {
       setLoadingGroups(false);
@@ -54,7 +59,6 @@ export default function Cart() {
       const groups = await groupService.getUserGroups(currentUser.uid);
       setUserGroups(groups);
       
-      // Auto-select if only one group
       if (groups.length === 1) {
         setSelectedGroup(groups[0]);
       }
@@ -66,49 +70,57 @@ export default function Cart() {
     }
   };
 
-  /**
-   * Validate checkout requirements
-   */
+  const fetchGroupProgress = async () => {
+    if (!selectedGroup) return;
+
+    try {
+      const activeOrders = await orderService.getActiveGroupOrders(selectedGroup.id);
+      
+      if (activeOrders.length > 0) {
+        const currentOrder = activeOrders[0];
+        setGroupProgress(currentOrder.productQuantities || {});
+      }
+    } catch (error) {
+      console.error('Error fetching group progress:', error);
+    }
+  };
+
+  const calculatePaymentDeadline = () => {
+    // Calculate 48-hour payment window from order creation
+    const deadline = new Date();
+    deadline.setHours(deadline.getHours() + 48);
+    setPaymentDeadline(deadline);
+
+    // Check if eligible for early bird (first 24 hours)
+    const earlyBirdDeadline = new Date();
+    earlyBirdDeadline.setHours(earlyBirdDeadline.getHours() + 24);
+    setIsEarlyBird(new Date() < earlyBirdDeadline);
+  };
+
   const validateCheckout = useCallback(() => {
     const errors = [];
 
-    // Check cart items
     if (cartItems.length === 0) {
       errors.push('Your cart is empty');
     }
 
-    // Check group selection
     if (!selectedGroup) {
       errors.push('Please select a group');
     }
 
-    // Check profile completion
-    if (!userProfile?.name) {
-      errors.push('Please complete your name in profile');
-    }
-    if (!userProfile?.email) {
-      errors.push('Please complete your email in profile');
-    }
-    if (!userProfile?.phone) {
-      errors.push('Please complete your phone number in profile');
-    }
+    if (!userProfile?.name) errors.push('Please complete your name in profile');
+    if (!userProfile?.email) errors.push('Please complete your email in profile');
+    if (!userProfile?.phone) errors.push('Please complete your phone number in profile');
 
     setValidationErrors(errors);
     return errors.length === 0;
   }, [cartItems, selectedGroup, userProfile]);
 
-  /**
-   * Handle proceed to payment with complete error handling
-   */
   const handleProceedToPayment = async () => {
-    console.log('🚀 Starting payment process...');
-    
-    // Validate before proceeding
     if (!validateCheckout()) {
       const firstError = validationErrors[0];
       toast.error(firstError);
       
-      // Redirect to profile if needed
       if (firstError.includes('profile')) {
         setTimeout(() => navigate('/profile'), 2000);
       }
@@ -118,9 +130,6 @@ export default function Cart() {
     setProcessingPayment(true);
 
     try {
-      console.log('📦 Creating order...');
-      
-      // Prepare order data
       const orderData = {
         userId: currentUser.uid,
         userName: userProfile.name,
@@ -135,16 +144,10 @@ export default function Cart() {
           minQuantity: item.minQuantity || 1
         })),
         totalAmount: getTotal(),
-        paymentStatus: 'pending'
+        paymentStatus: 'pending',
+        isEarlyBird: isEarlyBird
       };
 
-      console.log('Order data:', {
-        ...orderData,
-        itemCount: orderData.items.length,
-        totalAmount: orderData.totalAmount
-      });
-
-      // Create individual order
       const orderId = await orderService.createIndividualOrder(
         selectedGroup.id,
         orderData
@@ -154,18 +157,12 @@ export default function Cart() {
         throw new Error('Failed to create order');
       }
 
-      console.log('✅ Order created:', orderId);
-
-      // Get group order ID
       const groupOrderId = await orderService.getOrCreateActiveGroupOrder(selectedGroup.id);
       
       if (!groupOrderId) {
         throw new Error('Failed to create group order');
       }
 
-      console.log('✅ Group order ID:', groupOrderId);
-
-      // Prepare payment data
       const paymentData = {
         orderId: orderId,
         groupOrderId: groupOrderId,
@@ -177,53 +174,29 @@ export default function Cart() {
         amount: getTotal()
       };
 
-      console.log('💳 Initiating payment...');
-
-      // Initiate Razorpay payment
       const result = await paymentService.initiatePayment(paymentData);
 
       if (result.success) {
         console.log('✅ Payment initiated successfully');
-        // Cart will be cleared after successful payment
-        // The payment service handles redirect
       } else {
         throw new Error(result.error || 'Failed to initiate payment');
       }
 
     } catch (error) {
       console.error('❌ Error in payment process:', error);
-      
-      // Show user-friendly error
-      const errorMessage = error.message || 'Failed to process order';
-      toast.error(errorMessage, { duration: 5000 });
-      
-      // Log for debugging
-      console.error('Payment error details:', {
-        message: error.message,
-        stack: error.stack,
-        userProfile: {
-          name: userProfile?.name,
-          email: userProfile?.email,
-          phone: userProfile?.phone
-        },
-        selectedGroup: selectedGroup?.id,
-        cartItemsCount: cartItems.length
-      });
-
+      toast.error(error.message || 'Failed to process order', { duration: 5000 });
     } finally {
       setProcessingPayment(false);
     }
   };
 
-  /**
-   * Calculate final total with delivery fee
-   */
   const getTotal = () => {
     const DELIVERY_FEE = 30;
-    return getCartTotal() + DELIVERY_FEE;
+    const subtotal = getCartTotal();
+    const earlyBirdDiscount = isEarlyBird ? subtotal * 0.02 : 0; // 2% early bird discount
+    return subtotal + DELIVERY_FEE - earlyBirdDiscount;
   };
 
-  // Empty cart state
   if (cartItems.length === 0) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-gray-50 to-green-50 px-4 py-8">
@@ -263,9 +236,10 @@ export default function Cart() {
           {/* Cart Items */}
           <div className="lg:col-span-2 space-y-3 sm:space-y-4">
             {cartItems.map((item) => (
-              <CartItem
+              <CartItemWithProgress
                 key={item.id}
                 item={item}
+                groupProgress={groupProgress[item.id]}
                 onIncrement={() => incrementQuantity(item.id)}
                 onDecrement={() => decrementQuantity(item.id)}
                 onRemove={() => removeFromCart(item.id)}
@@ -276,135 +250,26 @@ export default function Cart() {
           {/* Sidebar */}
           <div className="space-y-4 sm:space-y-6">
             {/* Group Selection */}
-            <div className="bg-white rounded-xl sm:rounded-2xl shadow-xl p-4 sm:p-6">
-              <h3 className="text-lg sm:text-xl font-bold mb-3 sm:mb-4 flex items-center gap-2">
-                <UserGroupIcon className="h-5 w-5 sm:h-6 sm:w-6 text-green-600" />
-                <span>Select Your Group</span>
-              </h3>
-              
-              {loadingGroups ? (
-                <div className="py-4">
-                  <LoadingSpinner size="small" />
-                </div>
-              ) : userGroups.length > 0 ? (
-                <div className="space-y-2 sm:space-y-3">
-                  {userGroups.map((group) => (
-                    <button
-                      key={group.id}
-                      onClick={() => setSelectedGroup(group)}
-                      className={`w-full p-3 sm:p-4 rounded-lg sm:rounded-xl border-2 text-left transition-all duration-200 ${
-                        selectedGroup?.id === group.id
-                          ? 'border-green-600 bg-green-50 shadow-lg scale-105'
-                          : 'border-gray-200 hover:border-green-300 hover:shadow-md'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between">
-                        <div className="flex-1 min-w-0">
-                          <p className="font-bold text-gray-800 truncate text-sm sm:text-base">{group.name}</p>
-                          <p className="text-xs sm:text-sm text-gray-600">{group.members?.length || 0} members</p>
-                        </div>
-                        {selectedGroup?.id === group.id && (
-                          <div className="w-5 h-5 sm:w-6 sm:h-6 rounded-full bg-green-600 flex items-center justify-center flex-shrink-0 ml-2">
-                            <svg className="w-3 h-3 sm:w-4 sm:h-4 text-white" fill="currentColor" viewBox="0 0 20 20">
-                              <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                            </svg>
-                          </div>
-                        )}
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              ) : (
-                <div className="text-center py-4">
-                  <ExclamationCircleIcon className="h-12 w-12 text-gray-400 mx-auto mb-2" />
-                  <p className="text-sm sm:text-base text-gray-600 mb-4">You're not in any groups yet</p>
-                  <button
-                    onClick={() => navigate('/groups')}
-                    className="text-sm sm:text-base text-green-600 font-semibold hover:text-green-700 underline"
-                  >
-                    Join a Group →
-                  </button>
-                </div>
-              )}
-            </div>
+            <GroupSelector
+              userGroups={userGroups}
+              selectedGroup={selectedGroup}
+              setSelectedGroup={setSelectedGroup}
+              loadingGroups={loadingGroups}
+            />
 
             {/* Order Summary */}
-            <div className="bg-white rounded-xl sm:rounded-2xl shadow-xl p-4 sm:p-6 sticky top-20">
-              <h3 className="text-lg sm:text-xl font-bold mb-3 sm:mb-4">Order Summary</h3>
-              
-              <div className="space-y-2 sm:space-y-3 mb-4">
-                <div className="flex justify-between text-sm sm:text-base text-gray-600">
-                  <span>Subtotal ({cartItems.length} items):</span>
-                  <span className="font-medium">₹{getCartTotal()}</span>
-                </div>
-                <div className="flex justify-between text-green-600 font-semibold text-sm sm:text-base">
-                  <span>You Save:</span>
-                  <span>₹{getTotalSavings()}</span>
-                </div>
-                <div className="flex justify-between text-sm sm:text-base text-gray-600">
-                  <span>Delivery Fee:</span>
-                  <span className="font-medium">₹30</span>
-                </div>
-                <div className="border-t pt-2 sm:pt-3">
-                  <div className="flex justify-between font-bold text-base sm:text-lg">
-                    <span>Total:</span>
-                    <span className="text-green-600">₹{getTotal()}</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Savings Badge */}
-              <div className="bg-gradient-to-r from-green-50 to-emerald-50 rounded-xl p-3 sm:p-4 mb-4 border border-green-200">
-                <div className="flex items-center gap-2 mb-1">
-                  <span className="text-xl sm:text-2xl">🎉</span>
-                  <span className="font-semibold text-green-800 text-sm sm:text-base">You're Saving</span>
-                </div>
-                <p className="text-2xl sm:text-3xl font-bold text-green-600">₹{getTotalSavings()}</p>
-                <p className="text-xs sm:text-sm text-green-700 mt-1">vs retail prices</p>
-              </div>
-
-              {/* Validation Errors */}
-              {validationErrors.length > 0 && (
-                <div className="bg-red-50 border-l-4 border-red-500 p-3 mb-4 rounded">
-                  <div className="flex items-start">
-                    <ExclamationCircleIcon className="h-5 w-5 text-red-500 mr-2 flex-shrink-0 mt-0.5" />
-                    <div className="text-sm text-red-700">
-                      <p className="font-semibold mb-1">Cannot proceed:</p>
-                      <ul className="list-disc list-inside space-y-1">
-                        {validationErrors.map((error, index) => (
-                          <li key={index}>{error}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  </div>
-                </div>
-              )}
-              
-              {/* Payment Button */}
-              <button
-                onClick={handleProceedToPayment}
-                disabled={processingPayment || validationErrors.length > 0}
-                className="w-full py-3 sm:py-4 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-xl font-bold text-base sm:text-lg hover:shadow-xl transform hover:-translate-y-0.5 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none flex items-center justify-center gap-2"
-              >
-                {processingPayment ? (
-                  <>
-                    <div className="h-5 w-5 animate-spin rounded-full border-2 border-white border-t-transparent"></div>
-                    <span className="text-sm sm:text-base">Processing...</span>
-                  </>
-                ) : (
-                  <>
-                    <span className="text-sm sm:text-base">Proceed to Payment</span>
-                    <span className="text-sm sm:text-base">₹{getTotal()}</span>
-                  </>
-                )}
-              </button>
-
-              {validationErrors.length > 0 && (
-                <p className="text-center text-xs sm:text-sm text-red-600 mt-3">
-                  Please fix the errors above to continue
-                </p>
-              )}
-            </div>
+            <OrderSummary
+              cartItems={cartItems}
+              getCartTotal={getCartTotal}
+              getRetailTotal={getRetailTotal}
+              getTotalSavings={getTotalSavings}
+              getTotal={getTotal}
+              isEarlyBird={isEarlyBird}
+              paymentDeadline={paymentDeadline}
+              validationErrors={validationErrors}
+              processingPayment={processingPayment}
+              handleProceedToPayment={handleProceedToPayment}
+            />
           </div>
         </div>
       </div>
@@ -412,17 +277,17 @@ export default function Cart() {
   );
 }
 
-/**
- * Cart Item Component
- */
-function CartItem({ item, onIncrement, onDecrement, onRemove }) {
-  const savings = (item.retailPrice - item.groupPrice) * item.quantity;
-  const discount = Math.round(((item.retailPrice - item.groupPrice) / item.retailPrice) * 100);
+// Cart Item with Progress Tracking
+function CartItemWithProgress({ item, groupProgress, onIncrement, onDecrement, onRemove }) {
+  const currentQty = groupProgress?.quantity || 0;
+  const minQty = item.minQuantity || 50;
+  const progress = Math.min((currentQty / minQty) * 100, 100);
+  const remaining = Math.max(minQty - currentQty, 0);
+  const isMet = currentQty >= minQty;
 
   return (
     <div className="bg-white rounded-xl sm:rounded-2xl shadow-lg p-3 sm:p-4 lg:p-6 hover:shadow-xl transition-shadow">
       <div className="flex gap-3 sm:gap-4">
-        {/* Image */}
         <div className="w-20 h-20 sm:w-24 sm:h-24 bg-gradient-to-br from-gray-100 to-gray-200 rounded-lg sm:rounded-xl flex items-center justify-center flex-shrink-0">
           {item.imageUrl ? (
             <img src={item.imageUrl} alt={item.name} className="w-full h-full object-cover rounded-lg sm:rounded-xl" />
@@ -431,21 +296,35 @@ function CartItem({ item, onIncrement, onDecrement, onRemove }) {
           )}
         </div>
         
-        {/* Details */}
         <div className="flex-1 min-w-0">
           <div className="flex justify-between items-start mb-2 sm:mb-3 gap-2">
             <div className="flex-1 min-w-0">
               <h3 className="font-bold text-gray-800 text-sm sm:text-base lg:text-lg mb-1 truncate">{item.name}</h3>
-              {discount > 0 && (
-                <span className="inline-block px-2 py-0.5 bg-red-100 text-red-600 text-xs font-bold rounded-full">
-                  {discount}% OFF
-                </span>
-              )}
+              {/* Minimum Quantity Progress */}
+              <div className="mb-2">
+                <div className="flex justify-between items-center mb-1 text-xs sm:text-sm">
+                  <span className={`font-medium ${isMet ? 'text-green-600' : 'text-orange-600'}`}>
+                    {isMet ? '✓ Minimum Met' : `${remaining} more needed`}
+                  </span>
+                  <span className="text-gray-600 font-bold">{currentQty}/{minQty}</span>
+                </div>
+                <div className="w-full bg-gray-200 rounded-full h-2 overflow-hidden">
+                  <div 
+                    className={`h-full rounded-full transition-all duration-500 ${
+                      isMet 
+                        ? 'bg-gradient-to-r from-green-600 to-emerald-600' 
+                        : 'bg-gradient-to-r from-orange-500 to-yellow-500'
+                    }`}
+                    style={{ width: `${progress}%` }}
+                  >
+                    <div className="h-full bg-white/30 animate-pulse"></div>
+                  </div>
+                </div>
+              </div>
             </div>
             <button
               onClick={onRemove}
               className="p-1.5 sm:p-2 hover:bg-red-50 rounded-lg text-red-600 transition flex-shrink-0"
-              aria-label="Remove item"
             >
               <TrashIcon className="h-4 w-4 sm:h-5 sm:w-5" />
             </button>
@@ -456,25 +335,16 @@ function CartItem({ item, onIncrement, onDecrement, onRemove }) {
             <div className="flex items-center gap-2 sm:gap-3">
               <span className="text-xs sm:text-sm text-gray-500 line-through">₹{item.retailPrice}</span>
               <span className="text-base sm:text-lg lg:text-xl font-bold text-green-600">₹{item.groupPrice}</span>
-              <span className="text-xs sm:text-sm text-green-700 font-medium">Save ₹{item.retailPrice - item.groupPrice}</span>
             </div>
 
             {/* Quantity Controls */}
             <div className="flex items-center justify-between gap-2 sm:gap-3">
               <div className="flex items-center gap-2 sm:gap-3 bg-gray-100 rounded-lg sm:rounded-xl p-1 sm:p-2">
-                <button
-                  onClick={onDecrement}
-                  className="p-1 sm:p-1.5 hover:bg-white rounded-md transition"
-                  aria-label="Decrease quantity"
-                >
+                <button onClick={onDecrement} className="p-1 sm:p-1.5 hover:bg-white rounded-md transition">
                   <MinusIcon className="h-3 w-3 sm:h-4 sm:w-4" />
                 </button>
                 <span className="w-8 sm:w-10 text-center font-bold text-sm sm:text-base lg:text-lg">{item.quantity}</span>
-                <button
-                  onClick={onIncrement}
-                  className="p-1 sm:p-1.5 hover:bg-white rounded-md transition"
-                  aria-label="Increase quantity"
-                >
+                <button onClick={onIncrement} className="p-1 sm:p-1.5 hover:bg-white rounded-md transition">
                   <PlusIcon className="h-3 w-3 sm:h-4 sm:w-4" />
                 </button>
               </div>
@@ -482,12 +352,195 @@ function CartItem({ item, onIncrement, onDecrement, onRemove }) {
               <div className="text-right">
                 <p className="text-xs sm:text-sm text-gray-500">Item Total</p>
                 <p className="text-base sm:text-lg lg:text-xl font-bold text-gray-800">₹{item.groupPrice * item.quantity}</p>
-                <p className="text-xs text-green-600 font-medium">Saving ₹{savings}</p>
               </div>
             </div>
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+// Group Selector Component
+function GroupSelector({ userGroups, selectedGroup, setSelectedGroup, loadingGroups }) {
+  return (
+    <div className="bg-white rounded-xl sm:rounded-2xl shadow-xl p-4 sm:p-6">
+      <h3 className="text-lg sm:text-xl font-bold mb-3 sm:mb-4 flex items-center gap-2">
+        <UserGroupIcon className="h-5 w-5 sm:h-6 sm:w-6 text-green-600" />
+        <span>Select Your Group</span>
+      </h3>
+      
+      {loadingGroups ? (
+        <div className="py-4">
+          <LoadingSpinner size="small" />
+        </div>
+      ) : userGroups.length > 0 ? (
+        <div className="space-y-2 sm:space-y-3">
+          {userGroups.map((group) => (
+            <button
+              key={group.id}
+              onClick={() => setSelectedGroup(group)}
+              className={`w-full p-3 sm:p-4 rounded-lg sm:rounded-xl border-2 text-left transition-all duration-200 ${
+                selectedGroup?.id === group.id
+                  ? 'border-green-600 bg-green-50 shadow-lg scale-105'
+                  : 'border-gray-200 hover:border-green-300 hover:shadow-md'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex-1 min-w-0">
+                  <p className="font-bold text-gray-800 truncate text-sm sm:text-base">{group.name}</p>
+                  <p className="text-xs sm:text-sm text-gray-600">{group.members?.length || 0} members</p>
+                </div>
+                {selectedGroup?.id === group.id && (
+                  <div className="w-5 h-5 sm:w-6 sm:h-6 rounded-full bg-green-600 flex items-center justify-center flex-shrink-0 ml-2">
+                    <svg className="w-3 h-3 sm:w-4 sm:h-4 text-white" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                    </svg>
+                  </div>
+                )}
+              </div>
+            </button>
+          ))}
+        </div>
+      ) : (
+        <div className="text-center py-4">
+          <ExclamationCircleIcon className="h-12 w-12 text-gray-400 mx-auto mb-2" />
+          <p className="text-sm sm:text-base text-gray-600 mb-4">You're not in any groups yet</p>
+          <button
+            onClick={() => window.location.href = '/groups'}
+            className="text-sm sm:text-base text-green-600 font-semibold hover:text-green-700 underline"
+          >
+            Join a Group →
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Order Summary Component
+function OrderSummary({ 
+  cartItems, 
+  getCartTotal, 
+  getRetailTotal, 
+  getTotalSavings, 
+  getTotal, 
+  isEarlyBird,
+  paymentDeadline,
+  validationErrors, 
+  processingPayment, 
+  handleProceedToPayment 
+}) {
+  const earlyBirdDiscount = isEarlyBird ? getCartTotal() * 0.02 : 0;
+
+  return (
+    <div className="bg-white rounded-xl sm:rounded-2xl shadow-xl p-4 sm:p-6 sticky top-20">
+      <h3 className="text-lg sm:text-xl font-bold mb-3 sm:mb-4">Order Summary</h3>
+      
+      {/* Early Bird Banner */}
+      {isEarlyBird && (
+        <div className="mb-4 p-3 bg-gradient-to-r from-yellow-50 to-orange-50 border-2 border-yellow-400 rounded-xl">
+          <div className="flex items-center gap-2 mb-1">
+            <SparklesIcon className="h-5 w-5 text-yellow-600" />
+            <span className="font-bold text-yellow-900">Early Bird Bonus!</span>
+          </div>
+          <p className="text-xs text-yellow-800">
+            Order now and save an extra 2% (₹{earlyBirdDiscount.toFixed(0)})
+          </p>
+        </div>
+      )}
+
+      {/* Payment Deadline */}
+      {paymentDeadline && (
+        <div className="mb-4 p-3 bg-blue-50 rounded-xl flex items-center gap-2">
+          <ClockIcon className="h-5 w-5 text-blue-600" />
+          <div>
+            <p className="text-sm font-semibold text-blue-900">Payment Window</p>
+            <p className="text-xs text-blue-700">
+              Closes in {Math.round((paymentDeadline - new Date()) / (1000 * 60 * 60))} hours
+            </p>
+          </div>
+        </div>
+      )}
+      
+      <div className="space-y-2 sm:space-y-3 mb-4">
+        <div className="flex justify-between text-sm sm:text-base text-gray-600">
+          <span>Subtotal ({cartItems.length} items):</span>
+          <span className="font-medium">₹{getCartTotal()}</span>
+        </div>
+        {isEarlyBird && (
+          <div className="flex justify-between text-green-600 font-semibold text-sm sm:text-base">
+            <span>Early Bird Discount (2%):</span>
+            <span>-₹{earlyBirdDiscount.toFixed(0)}</span>
+          </div>
+        )}
+        <div className="flex justify-between text-green-600 font-semibold text-sm sm:text-base">
+          <span>You Save:</span>
+          <span>₹{getTotalSavings()}</span>
+        </div>
+        <div className="flex justify-between text-sm sm:text-base text-gray-600">
+          <span>Delivery Fee:</span>
+          <span className="font-medium">₹30</span>
+        </div>
+        <div className="border-t pt-2 sm:pt-3">
+          <div className="flex justify-between font-bold text-base sm:text-lg">
+            <span>Total:</span>
+            <span className="text-green-600">₹{getTotal()}</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Savings Badge */}
+      <div className="bg-gradient-to-r from-green-50 to-emerald-50 rounded-xl p-3 sm:p-4 mb-4 border border-green-200">
+        <div className="flex items-center gap-2 mb-1">
+          <span className="text-xl sm:text-2xl">🎉</span>
+          <span className="font-semibold text-green-800 text-sm sm:text-base">You're Saving</span>
+        </div>
+        <p className="text-2xl sm:text-3xl font-bold text-green-600">₹{getTotalSavings() + earlyBirdDiscount}</p>
+        <p className="text-xs sm:text-sm text-green-700 mt-1">vs retail prices + early bird bonus</p>
+      </div>
+
+      {/* Validation Errors */}
+      {validationErrors.length > 0 && (
+        <div className="bg-red-50 border-l-4 border-red-500 p-3 mb-4 rounded">
+          <div className="flex items-start">
+            <ExclamationCircleIcon className="h-5 w-5 text-red-500 mr-2 flex-shrink-0 mt-0.5" />
+            <div className="text-sm text-red-700">
+              <p className="font-semibold mb-1">Cannot proceed:</p>
+              <ul className="list-disc list-inside space-y-1">
+                {validationErrors.map((error, index) => (
+                  <li key={index}>{error}</li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        </div>
+      )}
+      
+      {/* Payment Button */}
+      <button
+        onClick={handleProceedToPayment}
+        disabled={processingPayment || validationErrors.length > 0}
+        className="w-full py-3 sm:py-4 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-xl font-bold text-base sm:text-lg hover:shadow-xl transform hover:-translate-y-0.5 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none flex items-center justify-center gap-2"
+      >
+        {processingPayment ? (
+          <>
+            <div className="h-5 w-5 animate-spin rounded-full border-2 border-white border-t-transparent"></div>
+            <span className="text-sm sm:text-base">Processing...</span>
+          </>
+        ) : (
+          <>
+            <span className="text-sm sm:text-base">Proceed to Payment</span>
+            <span className="text-sm sm:text-base">₹{getTotal()}</span>
+          </>
+        )}
+      </button>
+
+      {validationErrors.length > 0 && (
+        <p className="text-center text-xs sm:text-sm text-red-600 mt-3">
+          Please fix the errors above to continue
+        </p>
+      )}
     </div>
   );
 }

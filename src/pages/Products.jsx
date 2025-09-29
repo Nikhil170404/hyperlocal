@@ -1,11 +1,11 @@
-// src/pages/Products.jsx - MOBILE RESPONSIVE & FIXED
+// src/pages/Products.jsx - ENHANCED WITH TIERED PRICING
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { productService } from '../services/groupService';
 import { useCart } from '../contexts/CartContext';
 import LoadingSpinner, { SkeletonLoader } from '../components/LoadingSpinner';
-import { ShoppingCartIcon, MagnifyingGlassIcon, FunnelIcon, PlusIcon, MinusIcon, TrashIcon } from '@heroicons/react/24/outline';
-import { HeartIcon } from '@heroicons/react/24/solid';
+import { ShoppingCartIcon, MagnifyingGlassIcon, FunnelIcon, PlusIcon, MinusIcon, TrashIcon, ChartBarIcon } from '@heroicons/react/24/outline';
+import { HeartIcon, SparklesIcon } from '@heroicons/react/24/solid';
 import toast from 'react-hot-toast';
 
 export default function Products() {
@@ -31,12 +31,13 @@ export default function Products() {
       
       // Sort products
       if (sortBy === 'price-low') {
-        productsData = productsData.sort((a, b) => a.groupPrice - b.groupPrice);
+        productsData = productsData.sort((a, b) => (a.priceTiers?.[0]?.price || a.groupPrice) - (b.priceTiers?.[0]?.price || b.groupPrice));
       } else if (sortBy === 'price-high') {
-        productsData = productsData.sort((a, b) => b.groupPrice - a.groupPrice);
+        productsData = productsData.sort((a, b) => (b.priceTiers?.[0]?.price || b.groupPrice) - (a.priceTiers?.[0]?.price || a.groupPrice));
       } else if (sortBy === 'savings') {
         productsData = productsData.sort((a, b) => 
-          (b.retailPrice - b.groupPrice) - (a.retailPrice - a.groupPrice)
+          (b.retailPrice - (b.priceTiers?.[b.priceTiers.length-1]?.price || b.groupPrice)) - 
+          (a.retailPrice - (a.priceTiers?.[a.priceTiers.length-1]?.price || a.groupPrice))
         );
       }
       
@@ -67,7 +68,7 @@ export default function Products() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-green-50">
-      {/* Mobile Sticky Header */}
+      {/* Sticky Header */}
       <div className="sticky top-14 sm:top-16 z-40 bg-white shadow-md">
         <div className="max-w-7xl mx-auto px-3 sm:px-4 py-3 sm:py-4">
           <div className="flex items-center justify-between mb-3">
@@ -75,7 +76,9 @@ export default function Products() {
               <h1 className="text-2xl sm:text-3xl lg:text-4xl font-bold bg-gradient-to-r from-green-600 to-emerald-600 bg-clip-text text-transparent">
                 Products
               </h1>
-              <p className="text-xs sm:text-sm text-gray-600 mt-0.5">Save up to 40%</p>
+              <p className="text-xs sm:text-sm text-gray-600 mt-0.5">
+                <SparklesIcon className="inline h-4 w-4 text-yellow-500" /> Tiered pricing • Save more when group buys more
+              </p>
             </div>
             <button 
               onClick={() => navigate('/cart')}
@@ -93,7 +96,6 @@ export default function Products() {
 
           {/* Search and Filter */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-3">
-            {/* Search */}
             <div className="sm:col-span-2 relative">
               <MagnifyingGlassIcon className="h-4 w-4 sm:h-5 sm:w-5 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
               <input
@@ -105,7 +107,6 @@ export default function Products() {
               />
             </div>
 
-            {/* Sort */}
             <div className="relative">
               <FunnelIcon className="h-4 w-4 sm:h-5 sm:w-5 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
               <select
@@ -124,7 +125,7 @@ export default function Products() {
       </div>
 
       <div className="max-w-7xl mx-auto px-3 sm:px-4 lg:px-6 py-4">
-        {/* Category Filters - Horizontal Scroll */}
+        {/* Category Filters */}
         <div className="mb-4 sm:mb-6">
           <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide scroll-smooth">
             <button
@@ -135,7 +136,7 @@ export default function Products() {
                   : 'bg-white text-gray-700 hover:bg-gray-100 border border-gray-200'
               }`}
             >
-              All
+              All Products
             </button>
             {categories.map((category) => (
               <button
@@ -153,7 +154,7 @@ export default function Products() {
           </div>
         </div>
 
-        {/* Products Grid - Responsive */}
+        {/* Products Grid */}
         {loading ? (
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4 lg:gap-6">
             <SkeletonLoader type="product" count={8} />
@@ -182,13 +183,23 @@ export default function Products() {
   );
 }
 
-// Product Card Component - Mobile Optimized
+// Enhanced Product Card with Tiered Pricing
 function ProductCard({ product }) {
   const [isFavorite, setIsFavorite] = useState(false);
+  const [showTiers, setShowTiers] = useState(false);
   const { addToCart, isInCart, getItemQuantity, incrementQuantity, decrementQuantity, removeFromCart } = useCart();
   
-  const discount = Math.round(((product.retailPrice - product.groupPrice) / product.retailPrice) * 100);
-  const savings = product.retailPrice - product.groupPrice;
+  // Calculate pricing tiers or use default
+  const priceTiers = product.priceTiers || [
+    { minQty: 0, maxQty: 20, price: product.retailPrice * 0.95, label: 'Small' },
+    { minQty: 21, maxQty: 49, price: product.retailPrice * 0.88, label: 'Medium' },
+    { minQty: 50, maxQty: null, price: product.groupPrice || product.retailPrice * 0.80, label: 'Bulk' }
+  ];
+
+  const bestPrice = priceTiers[priceTiers.length - 1].price;
+  const discount = Math.round(((product.retailPrice - bestPrice) / product.retailPrice) * 100);
+  const maxSavings = product.retailPrice - bestPrice;
+  
   const inCart = isInCart(product.id);
   const quantity = getItemQuantity(product.id);
 
@@ -216,7 +227,7 @@ function ProductCard({ product }) {
         <div className="absolute top-2 left-2 right-2 flex justify-between items-start">
           {discount > 0 && (
             <span className="px-2 py-0.5 sm:px-2.5 sm:py-1 bg-red-500 text-white rounded-full text-xs sm:text-sm font-bold shadow-lg">
-              {discount}% OFF
+              UP TO {discount}% OFF
             </span>
           )}
           <button
@@ -234,19 +245,49 @@ function ProductCard({ product }) {
           {product.name}
         </h3>
         
+        {/* Tiered Pricing Display */}
         <div className="space-y-1 sm:space-y-1.5 mb-2.5 sm:mb-3">
           <div className="flex justify-between items-center text-xs sm:text-sm">
             <span className="text-gray-500">Retail:</span>
             <span className="text-red-600 line-through font-medium">₹{product.retailPrice}</span>
           </div>
+          
+          {/* Best Price */}
           <div className="flex justify-between items-center">
-            <span className="text-xs sm:text-sm font-semibold text-gray-700">Group:</span>
-            <span className="text-base sm:text-lg lg:text-xl text-green-600 font-bold">₹{product.groupPrice}</span>
+            <span className="text-xs sm:text-sm font-semibold text-gray-700">Best Price:</span>
+            <span className="text-base sm:text-lg lg:text-xl text-green-600 font-bold">₹{bestPrice}</span>
           </div>
+
+          {/* Tiered Pricing Toggle */}
+          <button
+            onClick={() => setShowTiers(!showTiers)}
+            className="w-full py-1 px-2 bg-blue-50 hover:bg-blue-100 rounded text-xs text-blue-600 font-medium transition flex items-center justify-center gap-1"
+          >
+            <ChartBarIcon className="h-3 w-3" />
+            {showTiers ? 'Hide' : 'View'} Pricing Tiers
+          </button>
+
+          {/* Pricing Tiers Dropdown */}
+          {showTiers && (
+            <div className="mt-2 p-2 bg-gradient-to-br from-blue-50 to-cyan-50 rounded-lg border border-blue-200 space-y-1.5 animate-fade-in">
+              {priceTiers.map((tier, index) => (
+                <div key={index} className="flex justify-between items-center text-xs">
+                  <span className="text-gray-700 font-medium">
+                    {tier.minQty}+ units:
+                  </span>
+                  <span className="text-green-700 font-bold">₹{tier.price}</span>
+                </div>
+              ))}
+              <div className="pt-1.5 border-t border-blue-200 text-xs text-gray-600 italic">
+                💡 More group orders = Lower prices!
+              </div>
+            </div>
+          )}
+
           <div className="pt-1 sm:pt-1.5 border-t border-gray-100">
             <div className="flex items-center justify-between">
-              <span className="text-xs text-gray-500">Save:</span>
-              <span className="text-green-700 font-bold text-xs sm:text-sm">₹{savings}</span>
+              <span className="text-xs text-gray-500">Max Save:</span>
+              <span className="text-green-700 font-bold text-xs sm:text-sm">₹{maxSavings}</span>
             </div>
           </div>
         </div>
