@@ -1,10 +1,19 @@
-// src/pages/Groups.jsx - Enhanced Version
+// src/pages/Groups.jsx - COMPLETELY FIXED
 import React, { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { groupService } from '../services/groupService';
 import LoadingSpinner, { SkeletonLoader } from '../components/LoadingSpinner';
-import { PlusIcon, UserGroupIcon, MapPinIcon, CalendarIcon, UsersIcon, SparklesIcon } from '@heroicons/react/24/outline';
+import { 
+  PlusIcon, 
+  UserGroupIcon, 
+  MapPinIcon, 
+  CalendarIcon, 
+  UsersIcon, 
+  SparklesIcon,
+  ShoppingBagIcon,
+  ArrowRightIcon
+} from '@heroicons/react/24/outline';
 import toast from 'react-hot-toast';
 
 export default function Groups() {
@@ -14,6 +23,7 @@ export default function Groups() {
   const [userLocation, setUserLocation] = useState(null);
   const [locationLoading, setLocationLoading] = useState(true);
   const { currentUser, userProfile } = useAuth();
+  const navigate = useNavigate();
 
   useEffect(() => {
     getUserLocation();
@@ -35,11 +45,10 @@ export default function Groups() {
             longitude: position.coords.longitude
           });
           setLocationLoading(false);
-          toast.success('Location detected!');
+          toast.success('Location detected!', { icon: '📍' });
         },
         (error) => {
-          console.error('Error getting location:', error);
-          // Use default location (Mumbai)
+          console.error('Location error:', error);
           setUserLocation({ latitude: 19.0760, longitude: 72.8777 });
           setLocationLoading(false);
           toast('Using default location: Mumbai', { icon: '📍' });
@@ -58,9 +67,10 @@ export default function Groups() {
         userLocation.latitude,
         userLocation.longitude
       );
+      console.log('✅ Fetched groups:', groupsData);
       setGroups(groupsData);
     } catch (error) {
-      console.error('Error fetching groups:', error);
+      console.error('❌ Error fetching groups:', error);
       toast.error('Failed to load groups');
     } finally {
       setLoading(false);
@@ -71,144 +81,143 @@ export default function Groups() {
     try {
       await groupService.joinGroup(groupId, currentUser.uid);
       toast.success('Successfully joined group!', { icon: '🎉' });
-      fetchGroups();
+      await fetchGroups(); // Refresh
     } catch (error) {
-      console.error('Error joining group:', error);
-      toast.error('Failed to join group');
+      console.error('❌ Error joining group:', error);
+      toast.error(error.message || 'Failed to join group');
     }
+  };
+
+  const handleViewDetails = (groupId) => {
+    console.log('📍 Navigating to group:', groupId);
+    navigate(`/groups/${groupId}`);
   };
 
   if (locationLoading) {
     return (
-      <div className="container mx-auto px-4 py-8">
+      <div className="min-h-screen bg-gradient-to-br from-gray-50 to-green-50 px-4 py-8">
         <LoadingSpinner size="large" text="Getting your location..." fullScreen />
       </div>
     );
   }
 
   return (
-    <div className="container mx-auto px-4 py-8">
-      {/* Header */}
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-8">
-        <div>
-          <h1 className="text-4xl font-bold text-gray-800 mb-2">Local Groups</h1>
-          <p className="text-gray-600 flex items-center gap-2">
-            <MapPinIcon className="h-5 w-5 text-green-600" />
-            Find and join buying groups in your area
-          </p>
-        </div>
-        <button
-          onClick={() => setShowCreateForm(true)}
-          className="flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-xl font-semibold hover:shadow-lg transform hover:-translate-y-0.5 transition-all duration-200"
-        >
-          <PlusIcon className="h-5 w-5" />
-          <span>Create Group</span>
-        </button>
-      </div>
-
-      {/* Stats Cards */}
-      <div className="grid md:grid-cols-3 gap-6 mb-8">
-        <div className="bg-gradient-to-br from-green-50 to-emerald-50 rounded-xl p-6 border border-green-100">
-          <div className="flex items-center gap-4">
-            <div className="p-3 bg-green-600 rounded-xl">
-              <UserGroupIcon className="h-8 w-8 text-white" />
-            </div>
-            <div>
-              <p className="text-sm text-gray-600 font-medium">Total Groups</p>
-              <p className="text-3xl font-bold text-gray-800">{groups.length}</p>
-            </div>
+    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-green-50 px-4 py-8">
+      <div className="max-w-7xl mx-auto">
+        {/* Header */}
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-8">
+          <div>
+            <h1 className="text-4xl font-bold text-gray-800 mb-2">Local Groups</h1>
+            <p className="text-gray-600 flex items-center gap-2">
+              <MapPinIcon className="h-5 w-5 text-green-600" />
+              Find and join buying groups in your area
+            </p>
           </div>
-        </div>
-        
-        <div className="bg-gradient-to-br from-blue-50 to-cyan-50 rounded-xl p-6 border border-blue-100">
-          <div className="flex items-center gap-4">
-            <div className="p-3 bg-blue-600 rounded-xl">
-              <UsersIcon className="h-8 w-8 text-white" />
-            </div>
-            <div>
-              <p className="text-sm text-gray-600 font-medium">Total Members</p>
-              <p className="text-3xl font-bold text-gray-800">
-                {groups.reduce((sum, g) => sum + (g.members?.length || 0), 0)}
-              </p>
-            </div>
-          </div>
-        </div>
-        
-        <div className="bg-gradient-to-br from-purple-50 to-pink-50 rounded-xl p-6 border border-purple-100">
-          <div className="flex items-center gap-4">
-            <div className="p-3 bg-purple-600 rounded-xl">
-              <SparklesIcon className="h-8 w-8 text-white" />
-            </div>
-            <div>
-              <p className="text-sm text-gray-600 font-medium">Active Orders</p>
-              <p className="text-3xl font-bold text-gray-800">
-                {groups.reduce((sum, g) => sum + (g.currentOrders?.length || 0), 0)}
-              </p>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Groups Grid */}
-      {loading ? (
-        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
-          <SkeletonLoader type="card" count={6} />
-        </div>
-      ) : groups.length === 0 ? (
-        <div className="text-center py-16 bg-white rounded-2xl shadow-md">
-          <div className="inline-flex items-center justify-center w-20 h-20 rounded-full bg-gradient-to-br from-green-100 to-emerald-100 mb-6">
-            <UserGroupIcon className="h-10 w-10 text-green-600" />
-          </div>
-          <h3 className="text-2xl font-bold text-gray-800 mb-2">No groups found nearby</h3>
-          <p className="text-gray-600 mb-6 max-w-md mx-auto">
-            Be the first to create a group in your area and start saving together!
-          </p>
           <button
             onClick={() => setShowCreateForm(true)}
-            className="inline-flex items-center gap-2 px-8 py-4 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-xl font-semibold hover:shadow-lg transform hover:-translate-y-0.5 transition-all duration-200"
+            className="flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-xl font-semibold hover:shadow-lg transform hover:-translate-y-0.5 transition-all duration-200"
           >
             <PlusIcon className="h-5 w-5" />
-            Create First Group
+            <span>Create Group</span>
           </button>
         </div>
-      ) : (
-        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {groups.map((group) => (
-            <GroupCard 
-              key={group.id} 
-              group={group} 
-              onJoin={handleJoinGroup}
-              currentUserId={currentUser.uid}
-            />
-          ))}
-        </div>
-      )}
 
-      {/* Create Group Modal */}
-      {showCreateForm && (
-        <CreateGroupModal 
-          onClose={() => setShowCreateForm(false)}
-          onSuccess={() => {
-            setShowCreateForm(false);
-            fetchGroups();
-          }}
-          userLocation={userLocation}
-        />
-      )}
+        {/* Stats Cards */}
+        <div className="grid md:grid-cols-3 gap-6 mb-8">
+          <StatsCard
+            icon={UserGroupIcon}
+            label="Total Groups"
+            value={groups.length}
+            color="green"
+          />
+          <StatsCard
+            icon={UsersIcon}
+            label="Total Members"
+            value={groups.reduce((sum, g) => sum + (g.members?.length || 0), 0)}
+            color="blue"
+          />
+          <StatsCard
+            icon={SparklesIcon}
+            label="Active Orders"
+            value={groups.reduce((sum, g) => sum + (g.currentOrders?.length || 0), 0)}
+            color="purple"
+          />
+        </div>
+
+        {/* Groups Grid */}
+        {loading ? (
+          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+            <SkeletonLoader type="card" count={6} />
+          </div>
+        ) : groups.length === 0 ? (
+          <EmptyState onCreateClick={() => setShowCreateForm(true)} />
+        ) : (
+          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {groups.map((group) => (
+              <GroupCard 
+                key={group.id} 
+                group={group} 
+                onJoin={handleJoinGroup}
+                onViewDetails={handleViewDetails}
+                currentUserId={currentUser.uid}
+              />
+            ))}
+          </div>
+        )}
+
+        {/* Create Group Modal */}
+        {showCreateForm && (
+          <CreateGroupModal 
+            onClose={() => setShowCreateForm(false)}
+            onSuccess={() => {
+              setShowCreateForm(false);
+              fetchGroups();
+            }}
+            userLocation={userLocation}
+          />
+        )}
+      </div>
     </div>
   );
 }
 
-function GroupCard({ group, onJoin, currentUserId }) {
+// Stats Card Component
+function StatsCard({ icon: Icon, label, value, color }) {
+  const colorClasses = {
+    green: 'from-green-500 to-emerald-600',
+    blue: 'from-blue-500 to-cyan-600',
+    purple: 'from-purple-500 to-pink-600'
+  };
+
+  return (
+    <div className="bg-white rounded-xl shadow-md p-6 hover:shadow-xl transition-shadow">
+      <div className={`inline-flex p-3 bg-gradient-to-br ${colorClasses[color]} rounded-xl mb-3`}>
+        <Icon className="h-8 w-8 text-white" />
+      </div>
+      <p className="text-sm text-gray-600 font-medium mb-1">{label}</p>
+      <p className="text-3xl font-bold text-gray-800">{value}</p>
+    </div>
+  );
+}
+
+// Group Card Component
+function GroupCard({ group, onJoin, onViewDetails, currentUserId }) {
   const [isJoining, setIsJoining] = useState(false);
   const isMember = group.members?.includes(currentUserId);
   const memberCount = group.members?.length || 0;
   const activeOrders = group.currentOrders?.length || 0;
 
-  const handleJoin = async () => {
+  const handleJoinClick = async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
     setIsJoining(true);
     await onJoin(group.id);
     setIsJoining(false);
+  };
+
+  const handleViewClick = (e) => {
+    e.preventDefault();
+    onViewDetails(group.id);
   };
 
   return (
@@ -220,15 +229,15 @@ function GroupCard({ group, onJoin, currentUserId }) {
           <div className="absolute -left-10 -bottom-10 w-40 h-40 bg-white rounded-full"></div>
         </div>
         <div className="relative">
-          <h3 className="text-2xl font-bold text-white mb-2">{group.name}</h3>
+          <h3 className="text-2xl font-bold text-white mb-2 truncate">{group.name}</h3>
           <div className="flex items-center gap-4 text-white/90 text-sm">
             <span className="flex items-center gap-1">
               <UsersIcon className="h-4 w-4" />
-              {memberCount} {memberCount === 1 ? 'member' : 'members'}
+              {memberCount} members
             </span>
             {activeOrders > 0 && (
               <span className="flex items-center gap-1">
-                <SparklesIcon className="h-4 w-4" />
+                <ShoppingBagIcon className="h-4 w-4" />
                 {activeOrders} active
               </span>
             )}
@@ -238,7 +247,9 @@ function GroupCard({ group, onJoin, currentUserId }) {
       
       {/* Content */}
       <div className="p-6">
-        <p className="text-gray-600 mb-4 line-clamp-2">{group.description}</p>
+        <p className="text-gray-600 mb-4 line-clamp-2 min-h-[3rem]">
+          {group.description || 'Join this group to start saving on bulk purchases!'}
+        </p>
         
         <div className="space-y-3 mb-6">
           <div className="flex items-center text-sm text-gray-600">
@@ -247,21 +258,31 @@ function GroupCard({ group, onJoin, currentUserId }) {
           </div>
           <div className="flex items-center text-sm text-gray-600">
             <CalendarIcon className="h-5 w-5 mr-3 text-green-600 flex-shrink-0" />
-            <span>Created {new Date(group.createdAt?.seconds * 1000).toLocaleDateString()}</span>
+            <span>
+              Created {group.createdAt ? new Date(group.createdAt.seconds * 1000).toLocaleDateString() : 'Recently'}
+            </span>
           </div>
+          {group.category && (
+            <div className="inline-flex items-center gap-2 px-3 py-1 bg-green-50 text-green-700 rounded-full text-sm font-medium">
+              <span>{getCategoryIcon(group.category)}</span>
+              <span className="capitalize">{group.category}</span>
+            </div>
+          )}
         </div>
         
         {/* Actions */}
         <div className="flex gap-3">
-          <Link
-            to={`/groups/${group.id}`}
-            className="flex-1 text-center px-4 py-3 bg-gray-100 text-gray-700 rounded-lg font-medium hover:bg-gray-200 transition-colors"
+          <button
+            onClick={handleViewClick}
+            className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-gray-100 text-gray-700 rounded-lg font-medium hover:bg-gray-200 transition-colors"
           >
-            View Details
-          </Link>
-          {!isMember && (
+            <span>View Details</span>
+            <ArrowRightIcon className="h-4 w-4" />
+          </button>
+          
+          {!isMember ? (
             <button
-              onClick={handleJoin}
+              onClick={handleJoinClick}
               disabled={isJoining}
               className="flex-1 px-4 py-3 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-lg font-semibold hover:shadow-lg transition-all duration-200 disabled:opacity-50 flex items-center justify-center gap-2"
             >
@@ -274,8 +295,7 @@ function GroupCard({ group, onJoin, currentUserId }) {
                 'Join Group'
               )}
             </button>
-          )}
-          {isMember && (
+          ) : (
             <div className="flex-1 px-4 py-3 bg-green-50 text-green-700 rounded-lg font-semibold flex items-center justify-center gap-2 border border-green-200">
               <svg className="h-5 w-5" fill="currentColor" viewBox="0 0 20 20">
                 <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
@@ -289,6 +309,29 @@ function GroupCard({ group, onJoin, currentUserId }) {
   );
 }
 
+// Empty State Component
+function EmptyState({ onCreateClick }) {
+  return (
+    <div className="text-center py-16 bg-white rounded-2xl shadow-md">
+      <div className="inline-flex items-center justify-center w-20 h-20 rounded-full bg-gradient-to-br from-green-100 to-emerald-100 mb-6">
+        <UserGroupIcon className="h-10 w-10 text-green-600" />
+      </div>
+      <h3 className="text-2xl font-bold text-gray-800 mb-2">No groups found nearby</h3>
+      <p className="text-gray-600 mb-6 max-w-md mx-auto">
+        Be the first to create a group in your area and start saving together!
+      </p>
+      <button
+        onClick={onCreateClick}
+        className="inline-flex items-center gap-2 px-8 py-4 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-xl font-semibold hover:shadow-lg transform hover:-translate-y-0.5 transition-all duration-200"
+      >
+        <PlusIcon className="h-5 w-5" />
+        Create First Group
+      </button>
+    </div>
+  );
+}
+
+// Create Group Modal Component
 function CreateGroupModal({ onClose, onSuccess, userLocation }) {
   const [formData, setFormData] = useState({
     name: '',
@@ -301,20 +344,38 @@ function CreateGroupModal({ onClose, onSuccess, userLocation }) {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    
+    if (!formData.name.trim()) {
+      toast.error('Please enter a group name');
+      return;
+    }
+    
+    if (!formData.description.trim()) {
+      toast.error('Please enter a description');
+      return;
+    }
+    
+    if (!formData.area.trim()) {
+      toast.error('Please enter an area');
+      return;
+    }
+
     setLoading(true);
 
     try {
-      await groupService.createGroup({
+      const groupId = await groupService.createGroup({
         ...formData,
         createdBy: currentUser.uid,
-        creatorName: userProfile.name,
+        creatorName: userProfile?.name || 'User',
         location: userLocation,
         maxMembers: 50
       });
+      
+      console.log('✅ Group created:', groupId);
       toast.success('Group created successfully!', { icon: '🎉' });
       onSuccess();
     } catch (error) {
-      console.error('Error creating group:', error);
+      console.error('❌ Error creating group:', error);
       toast.error('Failed to create group');
     } finally {
       setLoading(false);
@@ -377,7 +438,7 @@ function CreateGroupModal({ onClose, onSuccess, userLocation }) {
               Category *
             </label>
             <select
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500 transition cursor-pointer"
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500 appearance-none bg-white transition cursor-pointer"
               value={formData.category}
               onChange={(e) => setFormData({...formData, category: e.target.value})}
             >
@@ -418,4 +479,15 @@ function CreateGroupModal({ onClose, onSuccess, userLocation }) {
       </div>
     </div>
   );
+}
+
+// Helper function
+function getCategoryIcon(category) {
+  const icons = {
+    groceries: '🌾',
+    household: '🧽',
+    'personal-care': '🧴',
+    general: '📦'
+  };
+  return icons[category] || '📦';
 }
