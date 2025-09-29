@@ -1,8 +1,9 @@
-// src/pages/GroupOrderDetail.jsx - Mobile Responsive with Working Payment
+// src/pages/GroupOrderDetail.jsx - Updated with Razorpay Payment
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { orderService } from '../services/groupService';
+import { RazorpayButtonMobile } from '../components/RazorpayButton';
 import LoadingSpinner from '../components/LoadingSpinner';
 import { 
   UserGroupIcon, 
@@ -20,8 +21,7 @@ export default function GroupOrderDetail() {
   const { orderId } = useParams();
   const [groupOrder, setGroupOrder] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [paymentLoading, setPaymentLoading] = useState(false);
-  const { currentUser } = useAuth();
+  const { currentUser, userProfile } = useAuth();
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -47,22 +47,16 @@ export default function GroupOrderDetail() {
     }
   };
 
-  const handlePayment = async (userOrderId) => {
-    setPaymentLoading(true);
-    try {
-      // Simulate payment processing
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      await orderService.updatePaymentStatus(userOrderId, 'paid');
-      toast.success('Payment successful!', { 
-        icon: '💰',
-        duration: 4000 
-      });
-    } catch (error) {
-      console.error('Payment error:', error);
-      toast.error('Payment failed. Please try again.');
-    } finally {
-      setPaymentLoading(false);
-    }
+  const handlePaymentSuccess = () => {
+    toast.success('Payment successful!', { 
+      icon: '💰',
+      duration: 5000 
+    });
+    fetchOrderDetails(); // Refresh order details
+  };
+
+  const handlePaymentFailure = (error) => {
+    toast.error('Payment failed. Please try again.');
   };
 
   if (loading) {
@@ -196,7 +190,7 @@ export default function GroupOrderDetail() {
           </div>
         )}
 
-        {/* User's Order Section */}
+        {/* User's Order Section with Razorpay Payment */}
         {userParticipant && (
           <div className="bg-gradient-to-br from-blue-50 to-cyan-50 rounded-xl sm:rounded-2xl shadow-lg p-4 sm:p-6 mb-6 sm:mb-8 border-2 border-blue-200">
             <h3 className="text-lg sm:text-xl font-bold mb-3 sm:mb-4 flex items-center gap-2">
@@ -234,24 +228,25 @@ export default function GroupOrderDetail() {
                 </div>
               </div>
 
+              {/* Razorpay Payment Button */}
               {userParticipant.paymentStatus !== 'paid' && (
-                <button
-                  onClick={() => handlePayment(userParticipant.orderId)}
-                  disabled={paymentLoading}
-                  className="w-full mt-3 sm:mt-4 bg-gradient-to-r from-green-600 to-emerald-600 text-white py-2.5 sm:py-3 rounded-lg sm:rounded-xl font-bold hover:shadow-lg transform hover:-translate-y-0.5 transition-all duration-200 flex items-center justify-center gap-2 text-sm sm:text-base disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {paymentLoading ? (
-                    <>
-                      <div className="h-4 w-4 sm:h-5 sm:w-5 animate-spin rounded-full border-2 border-white border-t-transparent"></div>
-                      <span>Processing...</span>
-                    </>
-                  ) : (
-                    <>
-                      <CurrencyRupeeIcon className="h-4 w-4 sm:h-5 sm:w-5" />
-                      <span>Pay Now - ₹{userParticipant.amount}</span>
-                    </>
-                  )}
-                </button>
+                <div className="mt-3 sm:mt-4">
+                  <RazorpayButtonMobile
+                    orderData={{
+                      orderId: userParticipant.orderId,
+                      groupOrderId: orderId,
+                      groupId: groupOrder.groupId,
+                      userId: currentUser.uid,
+                      userName: userProfile.name,
+                      userEmail: userProfile.email,
+                      userPhone: userProfile.phone
+                    }}
+                    amount={userParticipant.amount}
+                    onSuccess={handlePaymentSuccess}
+                    onFailure={handlePaymentFailure}
+                    buttonText="Pay Now"
+                  />
+                </div>
               )}
             </div>
           </div>

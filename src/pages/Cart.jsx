@@ -1,10 +1,11 @@
-// src/pages/Cart.jsx - Fixed & Mobile Responsive
+// src/pages/Cart.jsx - Updated with Razorpay Payment Integration
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useCart } from '../contexts/CartContext';
 import { groupService, orderService } from '../services/groupService';
-import { TrashIcon, MinusIcon, PlusIcon, UserGroupIcon, CreditCardIcon, ShoppingBagIcon } from '@heroicons/react/24/outline';
+import { RazorpayButtonMobile } from '../components/RazorpayButton';
+import { TrashIcon, MinusIcon, PlusIcon, UserGroupIcon, ShoppingBagIcon } from '@heroicons/react/24/outline';
 import toast from 'react-hot-toast';
 import LoadingSpinner from '../components/LoadingSpinner';
 
@@ -13,6 +14,7 @@ export default function Cart() {
   const [userGroups, setUserGroups] = useState([]);
   const [loading, setLoading] = useState(false);
   const [loadingGroups, setLoadingGroups] = useState(true);
+  const [creatingOrder, setCreatingOrder] = useState(false);
   const { currentUser, userProfile } = useAuth();
   const { cartItems, updateQuantity, removeFromCart, getCartTotal, getRetailTotal, getTotalSavings, clearCart } = useCart();
   const navigate = useNavigate();
@@ -34,7 +36,7 @@ export default function Cart() {
     }
   };
 
-  const handleCheckout = async () => {
+  const handleCheckoutWithPayment = async () => {
     if (!selectedGroup) {
       toast.error('Please select a group to continue');
       return;
@@ -45,8 +47,9 @@ export default function Cart() {
       return;
     }
 
-    setLoading(true);
+    setCreatingOrder(true);
     try {
+      // Create order first
       const orderData = {
         userId: currentUser.uid,
         userName: userProfile.name,
@@ -62,15 +65,53 @@ export default function Cart() {
         orderData
       );
 
-      clearCart();
-      toast.success('Order placed successfully!', { icon: '🎉' });
-      navigate(`/orders/${orderId}`);
+      // Get the group order ID
+      const groupOrderId = await orderService.getOrCreateActiveGroupOrder(selectedGroup.id);
+
+      // Store order data for payment
+      setLoading(false);
+      setCreatingOrder(false);
+
+      // Open Razorpay payment
+      const paymentOrderData = {
+        orderId: orderId,
+        groupOrderId: groupOrderId,
+        groupId: selectedGroup.id,
+        userId: currentUser.uid,
+        userName: userProfile.name,
+        userEmail: userProfile.email,
+        userPhone: userProfile.phone,
+        amount: getTotal()
+      };
+
+      // The RazorpayButton component will handle the payment
+      return paymentOrderData;
+
     } catch (error) {
       console.error('Error creating order:', error);
-      toast.error('Failed to place order. Please try again.');
-    } finally {
+      toast.error('Failed to create order. Please try again.');
+      setCreatingOrder(false);
       setLoading(false);
+      return null;
     }
+  };
+
+  const handlePaymentSuccess = (result) => {
+    clearCart();
+    toast.success('Order placed and payment successful! 🎉', {
+      duration: 5000
+    });
+    // Navigate to orders page after a short delay
+    setTimeout(() => {
+      navigate('/orders');
+    }, 1500);
+  };
+
+  const handlePaymentFailure = (error) => {
+    toast.error('Payment failed. Your order is saved, you can retry payment from Orders page.');
+    setTimeout(() => {
+      navigate('/orders');
+    }, 2000);
   };
 
   const getTotal = () => {
@@ -205,23 +246,31 @@ export default function Cart() {
                 <p className="text-xs sm:text-sm text-green-700 mt-1">vs retail prices</p>
               </div>
               
-              <button
-                onClick={handleCheckout}
-                disabled={loading || !selectedGroup}
-                className="w-full bg-gradient-to-r from-green-600 to-emerald-600 text-white py-3 sm:py-4 rounded-xl font-bold text-base sm:text-lg hover:shadow-xl transform hover:-translate-y-0.5 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-              >
-                {loading ? (
-                  <>
-                    <div className="h-5 w-5 animate-spin rounded-full border-2 border-white border-t-transparent"></div>
-                    <span className="text-sm sm:text-base">Processing...</span>
-                  </>
-                ) : (
-                  <>
-                    <CreditCardIcon className="h-5 w-5 sm:h-6 sm:w-6" />
-                    <span className="text-sm sm:text-base">Proceed to Payment</span>
-                  </>
-                )}
-              </button>
+              {/* Payment Button */}
+              {selectedGroup && !creatingOrder ? (
+                <PaymentButtonWrapper
+                  orderData={null}
+                  amount={getTotal()}
+                  selectedGroup={selectedGroup}
+                  onCreateOrder={handleCheckoutWithPayment}
+                  onSuccess={handlePaymentSuccess}
+                  onFailure={handlePaymentFailure}
+                />
+              ) : (
+                <button
+                  disabled={true}
+                  className="w-full bg-gray-300 text-gray-500 py-3 sm:py-4 rounded-xl font-bold text-base sm:text-lg cursor-not-allowed flex items-center justify-center gap-2"
+                >
+                  {creatingOrder ? (
+                    <>
+                      <div className="h-5 w-5 animate-spin rounded-full border-2 border-gray-500 border-t-transparent"></div>
+                      <span className="text-sm sm:text-base">Creating Order...</span>
+                    </>
+                  ) : (
+                    <span className="text-sm sm:text-base">Select a Group</span>
+                  )}
+                </button>
+              )}
 
               {!selectedGroup && (
                 <p className="text-center text-xs sm:text-sm text-red-600 mt-3">
@@ -233,6 +282,58 @@ export default function Cart() {
         </div>
       </div>
     </div>
+  );
+}
+
+// Wrapper component to handle order creation before payment
+function PaymentButtonWrapper({ orderData, amount, selectedGroup, onCreateOrder, onSuccess, onFailure }) {
+  const [paymentData, setPaymentData] = useState(null);
+  const [creating, setCreating] = useState(false);
+
+  const handleClick = async () => {
+    if (!paymentData) {
+      setCreating(true);
+      const data = await onCreateOrder();
+      setCreating(false);
+      if (data) {
+        setPaymentData(data);
+        // Trigger payment immediately after order creation
+        setTimeout(() => {
+          document.getElementById('razorpay-payment-btn')?.click();
+        }, 100);
+      }
+    }
+  };
+
+  if (paymentData) {
+    return (
+      <div id="razorpay-payment-btn">
+        <RazorpayButtonMobile
+          orderData={paymentData}
+          amount={amount}
+          onSuccess={onSuccess}
+          onFailure={onFailure}
+          buttonText="Complete Payment"
+        />
+      </div>
+    );
+  }
+
+  return (
+    <button
+      onClick={handleClick}
+      disabled={creating}
+      className="w-full bg-gradient-to-r from-green-600 to-emerald-600 text-white py-3 sm:py-4 rounded-xl font-bold text-base sm:text-lg hover:shadow-xl transform hover:-translate-y-0.5 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+    >
+      {creating ? (
+        <>
+          <div className="h-5 w-5 animate-spin rounded-full border-2 border-white border-t-transparent"></div>
+          <span className="text-sm sm:text-base">Creating Order...</span>
+        </>
+      ) : (
+        <span className="text-sm sm:text-base">Proceed to Payment</span>
+      )}
+    </button>
   );
 }
 
