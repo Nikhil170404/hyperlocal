@@ -1,0 +1,92 @@
+[
+  {
+    "id": "groceries",
+    "name": "Groceries",
+    "description": "Rice, dal, oil, flour, spices and other cooking essentials",
+    "icon": "🌾",
+    "color": "green",
+    "isActive": true,
+    "sortOrder": 1
+  },
+  {
+    "id": "household",
+    "name": "Household",
+    "description": "Cleaning supplies, detergents, and home care products",
+    "icon": "🧽",
+    "color": "blue",
+    "isActive": true,
+    "sortOrder": 2
+  },
+  {
+    "id": "personal-care",
+    "name": "Personal Care",
+    "description": "Shampoo, soap, toothpaste and hygiene products",
+    "icon": "🧴",
+    "color": "purple",
+    "isActive": true,
+    "sortOrder": 3
+  },
+  {
+    "id": "packaged-foods",
+    "name": "Packaged Foods",
+    "description": "Snacks, instant foods, biscuits and ready-to-eat items",
+    "icon": "📦",
+    "color": "orange",
+    "isActive": true,
+    "sortOrder": 4
+  },
+  {
+    "id": "beverages",
+    "name": "Beverages",
+    "description": "Tea, coffee, juices, health drinks and soft drinks",
+    "icon": "☕",
+    "color": "brown",
+    "isActive": true,
+    "sortOrder": 5
+  },
+  {
+    "id": "dairy",
+    "name": "Dairy Products",
+    "description": "Milk, paneer, ghee, butter and dairy items",
+    "icon": "🥛",
+    "color": "cyan",
+    "isActive": true,
+    "sortOrder": 6
+  },
+  {
+    "id": "spices",
+    "name": "Spices & Masalas",
+    "description": "Whole spices, ground masalas and seasoning blends",
+    "icon": "🌶️",
+    "color": "red",
+    "isActive": true,
+    "sortOrder": 7
+  },
+  {
+    "id": "pulses",
+    "name": "Pulses & Grains",
+    "description": "Different varieties of dal and whole grains",
+    "icon": "🫘",
+    "color": "yellow",
+    "isActive": true,
+    "sortOrder": 8
+  },
+  {
+    "id": "snacks",
+    "name": "Snacks",
+    "description": "Namkeen, chips, biscuits and savory snacks",
+    "icon": "🍿",
+    "color": "pink",
+    "isActive": true,
+    "sortOrder": 9
+  },
+  {
+    "id": "kitchen-essentials",
+    "name": "Kitchen Essentials",
+    "description": "Foil, cling wrap, tissues and kitchen supplies",
+    "icon": "🍽️",
+    "color": "indigo",
+    "isActive": true,
+    "sortOrder": 10
+  }
+]

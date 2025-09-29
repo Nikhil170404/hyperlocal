@@ -1,21 +1,176 @@
-/ index.html
 <!doctype html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>GroupBuy - Hyperlocal Group Buying Platform</title>
-    <meta name="description" content="Save money on groceries by buying with neighbors. Join local groups and get wholesale prices on everyday essentials." />
-    <meta name="keywords" content="group buying, wholesale prices, groceries, hyperlocal, community shopping" />
     
-    <!-- Recaptcha for phone verification -->
-    <script src="https://www.gstatic.com/firebasejs/ui/6.0.1/firebase-ui-auth.js"></script>
+    <!-- Primary Meta Tags -->
+    <title>GroupBuy - Save Money by Buying Together with Neighbors</title>
+    <meta name="title" content="GroupBuy - Save Money by Buying Together with Neighbors" />
+    <meta name="description" content="Join your local community to buy groceries at wholesale prices. Save 20-40% on everyday essentials by pooling orders with neighbors." />
+    <meta name="keywords" content="group buying, wholesale prices, groceries, hyperlocal, community shopping, bulk buying, save money, neighborhood shopping" />
+    <meta name="author" content="GroupBuy" />
+    
+    <!-- Open Graph / Facebook -->
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://groupbuy.app/" />
+    <meta property="og:title" content="GroupBuy - Save Money by Buying Together" />
+    <meta property="og:description" content="Join your local community to buy groceries at wholesale prices. Save 20-40% on everyday essentials." />
+    <meta property="og:image" content="/og-image.jpg" />
+    
+    <!-- Twitter -->
+    <meta property="twitter:card" content="summary_large_image" />
+    <meta property="twitter:url" content="https://groupbuy.app/" />
+    <meta property="twitter:title" content="GroupBuy - Save Money by Buying Together" />
+    <meta property="twitter:description" content="Join your local community to buy groceries at wholesale prices. Save 20-40% on everyday essentials." />
+    <meta property="twitter:image" content="/twitter-image.jpg" />
+    
+    <!-- Favicon -->
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="alternate icon" href="/favicon.ico" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    
+    <!-- Theme Color -->
+    <meta name="theme-color" content="#16a34a" />
+    <meta name="msapplication-TileColor" content="#16a34a" />
+    
+    <!-- PWA Manifest -->
+    <link rel="manifest" href="/manifest.json" />
+    
+    <!-- Preconnect for Performance -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
+    
+    <!-- Firebase UI for Authentication -->
+    <script src="https://www.gstatic.com/firebasejs/ui/6.0.1/firebase-ui-auth.js" defer></script>
     <link type="text/css" rel="stylesheet" href="https://www.gstatic.com/firebasejs/ui/6.0.1/firebase-ui-auth.css" />
+    
+    <style>
+      /* Loading Screen Styles */
+      #app-loader {
+        position: fixed;
+        inset: 0;
+        background: linear-gradient(135deg, #16a34a 0%, #15803d 100%);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        z-index: 9999;
+        transition: opacity 0.3s ease-out;
+      }
+      
+      #app-loader.fade-out {
+        opacity: 0;
+        pointer-events: none;
+      }
+      
+      .loader-logo {
+        width: 80px;
+        height: 80px;
+        background: white;
+        border-radius: 20px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        margin-bottom: 24px;
+        animation: pulse 2s ease-in-out infinite;
+      }
+      
+      .loader-logo svg {
+        width: 48px;
+        height: 48px;
+        color: #16a34a;
+      }
+      
+      .loader-text {
+        color: white;
+        font-family: 'Inter', sans-serif;
+        font-size: 28px;
+        font-weight: 700;
+        margin-bottom: 8px;
+        letter-spacing: -0.5px;
+      }
+      
+      .loader-tagline {
+        color: rgba(255, 255, 255, 0.9);
+        font-family: 'Inter', sans-serif;
+        font-size: 16px;
+        font-weight: 400;
+        margin-bottom: 32px;
+      }
+      
+      .loader-spinner {
+        width: 50px;
+        height: 50px;
+        border: 4px solid rgba(255, 255, 255, 0.3);
+        border-top-color: white;
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+      }
+      
+      @keyframes spin {
+        to { transform: rotate(360deg); }
+      }
+      
+      @keyframes pulse {
+        0%, 100% {
+          transform: scale(1);
+          box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        }
+        50% {
+          transform: scale(1.05);
+          box-shadow: 0 25px 70px rgba(0, 0, 0, 0.4);
+        }
+      }
+      
+      /* Hide default scrollbar during loading */
+      body.loading {
+        overflow: hidden;
+      }
+    </style>
   </head>
-  <body>
+  <body class="loading">
+    <!-- Beautiful Loading Screen -->
+    <div id="app-loader">
+      <div class="loader-logo">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M18 18.72a9.094 9.094 0 003.741-.479 3 3 0 00-4.682-2.72m.94 3.198l.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0112 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 016 18.719m12 0a5.971 5.971 0 00-.941-3.197m0 0A5.995 5.995 0 0012 12.75a5.995 5.995 0 00-5.058 2.772m0 0a3 3 0 00-4.681 2.72 8.986 8.986 0 003.74.477m.94-3.197a5.971 5.971 0 00-.94 3.197M15 6.75a3 3 0 11-6 0 3 3 0 016 0zm6 3a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0zm-13.5 0a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0z" />
+        </svg>
+      </div>
+      <div class="loader-text">GroupBuy</div>
+      <div class="loader-tagline">Buy Together, Save More</div>
+      <div class="loader-spinner"></div>
+    </div>
+    
+    <!-- Main App -->
     <div id="root"></div>
+    
+    <!-- Recaptcha Container -->
     <div id="recaptcha-container"></div>
+    
+    <!-- Module Script -->
     <script type="module" src="/src/main.jsx"></script>
+    
+    <!-- Remove Loading Screen -->
+    <script>
+      window.addEventListener('load', () => {
+        setTimeout(() => {
+          const loader = document.getElementById('app-loader');
+          const body = document.body;
+          
+          if (loader) {
+            loader.classList.add('fade-out');
+            body.classList.remove('loading');
+            setTimeout(() => {
+              loader.style.display = 'none';
+            }, 300);
+          }
+        }, 500);
+      });
+    </script>
   </body>
 </html>
