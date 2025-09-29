@@ -1,9 +1,9 @@
-// src/pages/GroupOrderDetail.jsx - Updated with Razorpay Payment
+// src/pages/GroupOrderDetail.jsx - COMPLETELY FIXED
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { orderService } from '../services/groupService';
-import { RazorpayButtonMobile } from '../components/RazorpayButton';
+import { paymentService } from '../services/paymentService';
 import LoadingSpinner from '../components/LoadingSpinner';
 import { 
   UserGroupIcon, 
@@ -13,7 +13,8 @@ import {
   ShoppingBagIcon,
   TruckIcon,
   ExclamationCircleIcon,
-  ArrowLeftIcon
+  ArrowLeftIcon,
+  CreditCardIcon
 } from '@heroicons/react/24/outline';
 import toast from 'react-hot-toast';
 
@@ -21,15 +22,20 @@ export default function GroupOrderDetail() {
   const { orderId } = useParams();
   const [groupOrder, setGroupOrder] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [paymentProcessing, setPaymentProcessing] = useState(false);
   const { currentUser, userProfile } = useAuth();
   const navigate = useNavigate();
 
   useEffect(() => {
     fetchOrderDetails();
     
+    // Real-time updates
     const unsubscribe = orderService.subscribeToGroupOrder(
       orderId,
-      (data) => setGroupOrder(data)
+      (data) => {
+        console.log('Group order updated:', data);
+        setGroupOrder(data);
+      }
     );
 
     return () => unsubscribe();
@@ -47,16 +53,39 @@ export default function GroupOrderDetail() {
     }
   };
 
-  const handlePaymentSuccess = () => {
-    toast.success('Payment successful!', { 
-      icon: '💰',
-      duration: 5000 
-    });
-    fetchOrderDetails(); // Refresh order details
-  };
+  const handlePayNow = async () => {
+    if (!userParticipant) {
+      toast.error('Order not found');
+      return;
+    }
 
-  const handlePaymentFailure = (error) => {
-    toast.error('Payment failed. Please try again.');
+    setPaymentProcessing(true);
+
+    try {
+      const paymentData = {
+        orderId: userParticipant.orderId,
+        groupOrderId: orderId,
+        groupId: groupOrder.groupId,
+        userId: currentUser.uid,
+        userName: userProfile.name,
+        userEmail: userProfile.email,
+        userPhone: userProfile.phone,
+        amount: userParticipant.amount
+      };
+
+      console.log('Initiating payment:', paymentData);
+
+      const result = await paymentService.initiatePayment(paymentData);
+
+      if (!result.success) {
+        toast.error('Failed to initiate payment');
+      }
+    } catch (error) {
+      console.error('Payment error:', error);
+      toast.error('Payment failed');
+    } finally {
+      setPaymentProcessing(false);
+    }
   };
 
   if (loading) {
@@ -70,7 +99,13 @@ export default function GroupOrderDetail() {
   if (!groupOrder) {
     return (
       <div className="min-h-screen px-4 py-8 text-center">
-        <h2 className="text-xl sm:text-2xl font-bold text-gray-800">Order not found</h2>
+        <h2 className="text-xl sm:text-2xl font-bold text-gray-800 mb-4">Order not found</h2>
+        <button
+          onClick={() => navigate('/orders')}
+          className="px-6 py-3 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-xl font-semibold"
+        >
+          Back to Orders
+        </button>
       </div>
     );
   }
@@ -81,7 +116,7 @@ export default function GroupOrderDetail() {
   const paymentProgress = totalParticipants > 0 ? (totalPaid / totalParticipants) * 100 : 0;
 
   return (
-    <div className="min-h-screen bg-gray-50 px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
+    <div className="min-h-screen bg-gray-50 px-3 sm:px-4 py-6 sm:py-8 lg:px-6">
       <div className="max-w-7xl mx-auto">
         {/* Header */}
         <button
@@ -144,7 +179,7 @@ export default function GroupOrderDetail() {
           </p>
         </div>
 
-        {/* Minimum Quantity Progress */}
+        {/* Product Quantities */}
         {groupOrder.productQuantities && Object.keys(groupOrder.productQuantities).length > 0 && (
           <div className="bg-white rounded-xl sm:rounded-2xl shadow-lg p-4 sm:p-6 mb-6 sm:mb-8">
             <h3 className="text-lg sm:text-xl font-bold mb-3 sm:mb-4">Product Quantities</h3>
@@ -190,7 +225,7 @@ export default function GroupOrderDetail() {
           </div>
         )}
 
-        {/* User's Order Section with Razorpay Payment */}
+        {/* User's Order Section */}
         {userParticipant && (
           <div className="bg-gradient-to-br from-blue-50 to-cyan-50 rounded-xl sm:rounded-2xl shadow-lg p-4 sm:p-6 mb-6 sm:mb-8 border-2 border-blue-200">
             <h3 className="text-lg sm:text-xl font-bold mb-3 sm:mb-4 flex items-center gap-2">
@@ -216,7 +251,7 @@ export default function GroupOrderDetail() {
                   {userParticipant.items.map((item, index) => (
                     <div key={index} className="flex justify-between text-xs sm:text-sm">
                       <span className="truncate mr-2">{item.name} x{item.quantity}</span>
-                      <span className="font-medium flex-shrink-0">₹{item.groupPrice * item.quantity}</span>
+                      <span className="font-medium flex-shrink-0">₹{item.price * item.quantity}</span>
                     </div>
                   ))}
                 </div>
@@ -228,24 +263,26 @@ export default function GroupOrderDetail() {
                 </div>
               </div>
 
-              {/* Razorpay Payment Button */}
+              {/* Payment Button */}
               {userParticipant.paymentStatus !== 'paid' && (
                 <div className="mt-3 sm:mt-4">
-                  <RazorpayButtonMobile
-                    orderData={{
-                      orderId: userParticipant.orderId,
-                      groupOrderId: orderId,
-                      groupId: groupOrder.groupId,
-                      userId: currentUser.uid,
-                      userName: userProfile.name,
-                      userEmail: userProfile.email,
-                      userPhone: userProfile.phone
-                    }}
-                    amount={userParticipant.amount}
-                    onSuccess={handlePaymentSuccess}
-                    onFailure={handlePaymentFailure}
-                    buttonText="Pay Now"
-                  />
+                  <button
+                    onClick={handlePayNow}
+                    disabled={paymentProcessing}
+                    className="w-full bg-gradient-to-r from-green-600 to-emerald-600 text-white py-2.5 sm:py-3 rounded-lg sm:rounded-xl font-bold hover:shadow-lg transform hover:-translate-y-0.5 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 text-sm sm:text-base"
+                  >
+                    {paymentProcessing ? (
+                      <>
+                        <div className="h-4 w-4 sm:h-5 sm:w-5 animate-spin rounded-full border-2 border-white border-t-transparent"></div>
+                        <span>Processing...</span>
+                      </>
+                    ) : (
+                      <>
+                        <CreditCardIcon className="h-4 w-4 sm:h-5 sm:w-5" />
+                        <span>Pay Now - ₹{userParticipant.amount}</span>
+                      </>
+                    )}
+                  </button>
                 </div>
               )}
             </div>
@@ -255,15 +292,19 @@ export default function GroupOrderDetail() {
         {/* All Participants */}
         <div className="bg-white rounded-xl sm:rounded-2xl shadow-lg p-4 sm:p-6">
           <h3 className="text-lg sm:text-xl font-bold mb-3 sm:mb-4">All Participants</h3>
-          <div className="space-y-2 sm:space-y-3">
-            {groupOrder.participants?.map((participant, index) => (
-              <ParticipantCard 
-                key={index} 
-                participant={participant}
-                isCurrentUser={participant.userId === currentUser.uid}
-              />
-            ))}
-          </div>
+          {groupOrder.participants && groupOrder.participants.length > 0 ? (
+            <div className="space-y-2 sm:space-y-3">
+              {groupOrder.participants.map((participant, index) => (
+                <ParticipantCard 
+                  key={index} 
+                  participant={participant}
+                  isCurrentUser={participant.userId === currentUser.uid}
+                />
+              ))}
+            </div>
+          ) : (
+            <p className="text-center text-gray-500 py-8">No participants yet</p>
+          )}
         </div>
       </div>
     </div>
@@ -280,13 +321,11 @@ function StatCard({ title, value, icon: Icon, color }) {
 
   return (
     <div className="bg-white rounded-lg sm:rounded-xl shadow-md p-3 sm:p-4 lg:p-6">
-      <div className="flex items-center justify-between mb-2 sm:mb-3">
-        <div className={`p-2 sm:p-3 bg-gradient-to-br ${colorClasses[color]} rounded-lg sm:rounded-xl`}>
-          <Icon className="h-4 w-4 sm:h-5 sm:w-5 lg:h-6 lg:w-6 text-white" />
-        </div>
+      <div className={`inline-flex p-2 sm:p-3 bg-gradient-to-br ${colorClasses[color]} rounded-lg sm:rounded-xl mb-2 sm:mb-3`}>
+        <Icon className="h-4 w-4 sm:h-5 sm:w-5 lg:h-6 lg:w-6 text-white" />
       </div>
       <p className="text-xs sm:text-sm text-gray-600 font-medium mb-0.5 sm:mb-1">{title}</p>
-      <p className="text-lg sm:text-xl lg:text-2xl font-bold text-gray-800 capitalize truncate">{value}</p>
+      <p className="text-base sm:text-lg lg:text-2xl font-bold text-gray-800 capitalize truncate">{value}</p>
     </div>
   );
 }
