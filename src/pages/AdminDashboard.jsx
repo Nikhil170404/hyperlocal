@@ -1,4 +1,4 @@
-// src/pages/AdminDashboard.jsx
+// src/pages/AdminDashboard.jsx - Updated with Data Upload
 import React, { useState, useEffect } from 'react';
 import { 
   collection, 
@@ -12,12 +12,14 @@ import {
 import { db } from '../config/firebase';
 import { productService } from '../services/groupService';
 import LoadingSpinner from '../components/LoadingSpinner';
+import DataUploadAdmin from '../components/DataUploadAdmin';
 import { 
   UserGroupIcon, 
   ShoppingBagIcon, 
   CurrencyRupeeIcon,
   PlusIcon,
-  ChartBarIcon
+  ChartBarIcon,
+  ArrowUpTrayIcon
 } from '@heroicons/react/24/outline';
 
 export default function AdminDashboard() {
@@ -77,10 +79,18 @@ export default function AdminDashboard() {
   if (loading) {
     return (
       <div className="container mx-auto px-4 py-8">
-        <LoadingSpinner size="large" />
+        <LoadingSpinner size="large" text="Loading dashboard..." fullScreen />
       </div>
     );
   }
+
+  const tabs = [
+    { id: 'overview', label: 'Overview', icon: ChartBarIcon },
+    { id: 'products', label: 'Products', icon: ShoppingBagIcon },
+    { id: 'orders', label: 'Orders', icon: ShoppingBagIcon },
+    { id: 'users', label: 'Users', icon: UserGroupIcon },
+    { id: 'data-upload', label: 'Data Upload', icon: ArrowUpTrayIcon }
+  ];
 
   return (
     <div className="container mx-auto px-4 py-8">
@@ -116,20 +126,24 @@ export default function AdminDashboard() {
 
       {/* Tabs */}
       <div className="border-b border-gray-200 mb-6">
-        <nav className="flex space-x-8">
-          {['overview', 'products', 'orders', 'users'].map((tab) => (
-            <button
-              key={tab}
-              onClick={() => setActiveTab(tab)}
-              className={`py-2 px-1 border-b-2 font-medium text-sm capitalize ${
-                activeTab === tab
-                  ? 'border-green-500 text-green-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700'
-              }`}
-            >
-              {tab}
-            </button>
-          ))}
+        <nav className="flex space-x-8 overflow-x-auto">
+          {tabs.map((tab) => {
+            const Icon = tab.icon;
+            return (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className={`flex items-center gap-2 py-2 px-1 border-b-2 font-medium text-sm whitespace-nowrap ${
+                  activeTab === tab.id
+                    ? 'border-green-500 text-green-600'
+                    : 'border-transparent text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                <Icon className="h-5 w-5" />
+                <span>{tab.label}</span>
+              </button>
+            );
+          })}
         </nav>
       </div>
 
@@ -140,22 +154,26 @@ export default function AdminDashboard() {
           <div className="bg-white rounded-lg shadow p-6">
             <h3 className="text-xl font-semibold mb-4">Recent Orders</h3>
             <div className="space-y-4">
-              {recentOrders.map((order) => (
-                <div key={order.id} className="flex justify-between items-center p-3 border border-gray-200 rounded-lg">
-                  <div>
-                    <p className="font-medium">Order #{order.id.slice(-6)}</p>
-                    <p className="text-sm text-gray-600">
-                      {order.createdAt && new Date(order.createdAt.seconds * 1000).toLocaleDateString()}
-                    </p>
+              {recentOrders.length > 0 ? (
+                recentOrders.map((order) => (
+                  <div key={order.id} className="flex justify-between items-center p-3 border border-gray-200 rounded-lg">
+                    <div>
+                      <p className="font-medium">Order #{order.id.slice(-6)}</p>
+                      <p className="text-sm text-gray-600">
+                        {order.createdAt && new Date(order.createdAt.seconds * 1000).toLocaleDateString()}
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <p className="font-bold">₹{order.totalAmount}</p>
+                      <span className={`px-2 py-1 rounded-full text-xs ${getStatusColor(order.status)}`}>
+                        {order.status}
+                      </span>
+                    </div>
                   </div>
-                  <div className="text-right">
-                    <p className="font-bold">₹{order.totalAmount}</p>
-                    <span className={`px-2 py-1 rounded-full text-xs ${getStatusColor(order.status)}`}>
-                      {order.status}
-                    </span>
-                  </div>
-                </div>
-              ))}
+                ))
+              ) : (
+                <p className="text-gray-500 text-center py-4">No orders yet</p>
+              )}
             </div>
           </div>
 
@@ -170,6 +188,17 @@ export default function AdminDashboard() {
                 <div className="flex items-center space-x-3">
                   <PlusIcon className="h-5 w-5 text-green-600" />
                   <span>Add New Product</span>
+                </div>
+                <span className="text-gray-400">→</span>
+              </button>
+              
+              <button
+                onClick={() => setActiveTab('data-upload')}
+                className="w-full flex items-center justify-between p-3 border border-gray-200 rounded-lg hover:bg-gray-50 transition"
+              >
+                <div className="flex items-center space-x-3">
+                  <ArrowUpTrayIcon className="h-5 w-5 text-blue-600" />
+                  <span>Upload Sample Data</span>
                 </div>
                 <span className="text-gray-400">→</span>
               </button>
@@ -200,6 +229,7 @@ export default function AdminDashboard() {
       {activeTab === 'products' && <ProductsManagement />}
       {activeTab === 'orders' && <OrdersManagement />}
       {activeTab === 'users' && <UsersManagement />}
+      {activeTab === 'data-upload' && <DataUploadAdmin />}
     </div>
   );
 }
@@ -286,29 +316,37 @@ function ProductsManagement() {
             </tr>
           </thead>
           <tbody className="bg-white divide-y divide-gray-200">
-            {products.map((product) => (
-              <tr key={product.id}>
-                <td className="px-6 py-4 whitespace-nowrap">
-                  <div>
-                    <div className="text-sm font-medium text-gray-900">{product.name}</div>
-                    <div className="text-sm text-gray-500">{product.description}</div>
-                  </div>
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 capitalize">
-                  {product.category}
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                  ₹{product.retailPrice}
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                  ₹{product.groupPrice}
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                  <button className="text-green-600 hover:text-green-700 mr-3">Edit</button>
-                  <button className="text-red-600 hover:text-red-700">Delete</button>
+            {products.length > 0 ? (
+              products.map((product) => (
+                <tr key={product.id}>
+                  <td className="px-6 py-4 whitespace-nowrap">
+                    <div>
+                      <div className="text-sm font-medium text-gray-900">{product.name}</div>
+                      <div className="text-sm text-gray-500">{product.description}</div>
+                    </div>
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 capitalize">
+                    {product.category}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                    ₹{product.retailPrice}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                    ₹{product.groupPrice}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                    <button className="text-green-600 hover:text-green-700 mr-3">Edit</button>
+                    <button className="text-red-600 hover:text-red-700">Delete</button>
+                  </td>
+                </tr>
+              ))
+            ) : (
+              <tr>
+                <td colSpan="5" className="px-6 py-8 text-center text-gray-500">
+                  No products found. Upload sample data or add products manually.
                 </td>
               </tr>
-            ))}
+            )}
           </tbody>
         </table>
       </div>
