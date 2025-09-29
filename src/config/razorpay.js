@@ -1,12 +1,12 @@
-// src/config/razorpay.js - Razorpay Configuration
+// src/config/razorpay.js - Razorpay Configuration - UPDATED
 
 // IMPORTANT: Replace these with your actual Razorpay keys
 // Get these from: https://dashboard.razorpay.com/app/keys
 
 export const RAZORPAY_CONFIG = {
-  // Use Test Key for development, Live Key for production
-  KEY_ID: import.meta.env.VITE_RAZORPAY_KEY_ID || 'rzp_test_YOUR_KEY_ID',
-  KEY_SECRET: import.meta.env.VITE_RAZORPAY_KEY_SECRET || 'YOUR_KEY_SECRET', // NEVER expose in frontend
+  // Your test credentials
+  KEY_ID: 'rzp_test_RNTPHWzRLB1xYG',
+  KEY_SECRET: 'M7vID0ilFMnZFWrKrXOyVPW7', // Note: Never expose in production
   
   // Payment options
   OPTIONS: {
@@ -33,14 +33,4 @@ export const loadRazorpayScript = () => {
     };
     document.body.appendChild(script);
   });
-};
-
-// Verify payment signature (should be done on server-side for security)
-export const verifyPaymentSignature = (orderId, paymentId, signature, secret) => {
-  const crypto = require('crypto');
-  const expectedSignature = crypto
-    .createHmac('sha256', secret)
-    .update(`${orderId}|${paymentId}`)
-    .digest('hex');
-  return expectedSignature === signature;
 };

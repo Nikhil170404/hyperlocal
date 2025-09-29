@@ -1,4 +1,4 @@
-// src/App.jsx - Final with CartProvider
+// src/App.jsx - Verified with CartProvider
 import React, { Suspense, lazy } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
@@ -24,7 +24,7 @@ const GroupOrderDetail = lazy(() => import('./pages/GroupOrderDetail'));
 // Loading fallback
 function PageLoader() {
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50">
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-50 to-green-50">
       <LoadingSpinner size="large" text="Loading page..." fullScreen />
     </div>
   );
@@ -61,7 +61,7 @@ function AppContent() {
   const { currentUser } = useAuth();
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-green-50">
       <Navbar />
       
       <main className="min-h-screen">
@@ -152,13 +152,15 @@ function AppContent() {
             <Route 
               path="*" 
               element={
-                <div className="min-h-screen flex items-center justify-center bg-gray-50">
+                <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-50 to-green-50">
                   <div className="text-center px-4">
-                    <h1 className="text-4xl sm:text-6xl font-bold text-gray-800 mb-4">404</h1>
-                    <p className="text-lg sm:text-xl text-gray-600 mb-6">Page not found</p>
+                    <h1 className="text-6xl font-bold bg-gradient-to-r from-green-600 to-emerald-600 bg-clip-text text-transparent mb-4">
+                      404
+                    </h1>
+                    <p className="text-xl text-gray-600 mb-6">Page not found</p>
                     <a 
                       href="/" 
-                      className="inline-block px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition text-sm sm:text-base"
+                      className="inline-block px-8 py-3 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-xl font-bold hover:shadow-xl transition"
                     >
                       Go Home
                     </a>

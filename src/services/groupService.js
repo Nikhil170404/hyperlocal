@@ -1,4 +1,4 @@
-// src/services/groupService.js - Complete Service File with All Exports
+// src/services/groupService.js - Complete Service File - UPDATED WITH FIXES
 import { 
   collection, 
   doc, 
@@ -271,7 +271,7 @@ export const productService = {
 };
 
 // ============================================
-// ORDER SERVICE  
+// ORDER SERVICE - FIXED VERSION
 // ============================================
 export const orderService = {
   // Create individual order within a group
@@ -296,7 +296,7 @@ export const orderService = {
         updatedAt: serverTimestamp()
       });
 
-      // Update group order with this participant
+      // FIXED: Use Date.now() instead of serverTimestamp() in arrayUnion
       await this.addParticipantToGroupOrder(groupOrderId, {
         userId: orderData.userId,
         userName: orderData.userName,
@@ -304,7 +304,7 @@ export const orderService = {
         amount: orderData.totalAmount,
         items: orderData.items,
         paymentStatus: 'pending',
-        joinedAt: serverTimestamp()
+        joinedAt: Date.now() // FIXED: Use Date.now() instead of serverTimestamp()
       });
 
       return orderRef.id;
@@ -320,8 +320,7 @@ export const orderService = {
       const groupOrdersQuery = query(
         collection(db, 'groupOrders'),
         where('groupId', '==', groupId),
-        where('status', 'in', ['collecting', 'active']),
-        orderBy('createdAt', 'desc')
+        where('status', 'in', ['collecting', 'active'])
       );
       
       const snapshot = await getDocs(groupOrdersQuery);
@@ -411,7 +410,7 @@ export const orderService = {
 
       const groupOrderData = groupOrderDoc.data();
       const updatedParticipants = groupOrderData.participants.map(p =>
-        p.userId === userId ? { ...p, paymentStatus: status } : p
+        p.userId === userId ? { ...p, paymentStatus: status, paidAt: Date.now() } : p
       );
 
       await updateDoc(groupOrderRef, {
@@ -492,20 +491,27 @@ export const orderService = {
     }
   },
 
-  // Get user's orders
+  // Get user's orders - FIXED to not require index
   async getUserOrders(userId) {
     try {
+      // Simplified query without orderBy to avoid index requirement
       const ordersQuery = query(
         collection(db, 'orders'),
-        where('userId', '==', userId),
-        orderBy('createdAt', 'desc')
+        where('userId', '==', userId)
       );
       
       const snapshot = await getDocs(ordersQuery);
-      return snapshot.docs.map(doc => ({
+      const orders = snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
       }));
+      
+      // Sort client-side
+      return orders.sort((a, b) => {
+        const aTime = a.createdAt?.seconds || 0;
+        const bTime = b.createdAt?.seconds || 0;
+        return bTime - aTime;
+      });
     } catch (error) {
       console.error('Error fetching user orders:', error);
       throw error;

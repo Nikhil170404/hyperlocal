@@ -1,5 +1,14 @@
-// src/contexts/CartContext.jsx - Global Cart Management
+// src/contexts/CartContext.jsx - Firestore-based Cart (No localStorage)
 import React, { createContext, useContext, useState, useEffect } from 'react';
+import { 
+  doc, 
+  setDoc, 
+  getDoc, 
+  updateDoc, 
+  deleteDoc,
+  onSnapshot 
+} from 'firebase/firestore';
+import { db } from '../config/firebase';
 import { useAuth } from './AuthContext';
 import toast from 'react-hot-toast';
 
@@ -15,78 +24,131 @@ export function useCart() {
 
 export function CartProvider({ children }) {
   const [cartItems, setCartItems] = useState([]);
+  const [loading, setLoading] = useState(true);
   const { currentUser } = useAuth();
 
-  // Load cart from localStorage on mount
+  // Subscribe to cart changes in Firestore
   useEffect(() => {
-    if (currentUser) {
-      const savedCart = localStorage.getItem(`cart_${currentUser.uid}`);
-      if (savedCart) {
-        try {
-          setCartItems(JSON.parse(savedCart));
-        } catch (error) {
-          console.error('Error loading cart:', error);
-          setCartItems([]);
-        }
-      }
-    } else {
+    if (!currentUser) {
       setCartItems([]);
+      setLoading(false);
+      return;
     }
+
+    const cartRef = doc(db, 'carts', currentUser.uid);
+    
+    const unsubscribe = onSnapshot(cartRef, (doc) => {
+      if (doc.exists()) {
+        const data = doc.data();
+        setCartItems(data.items || []);
+      } else {
+        setCartItems([]);
+      }
+      setLoading(false);
+    }, (error) => {
+      console.error('Error loading cart:', error);
+      setCartItems([]);
+      setLoading(false);
+    });
+
+    return () => unsubscribe();
   }, [currentUser]);
 
-  // Save cart to localStorage whenever it changes
-  useEffect(() => {
-    if (currentUser) {
-      localStorage.setItem(`cart_${currentUser.uid}`, JSON.stringify(cartItems));
+  // Save cart to Firestore
+  const saveCart = async (items) => {
+    if (!currentUser) return;
+
+    try {
+      const cartRef = doc(db, 'carts', currentUser.uid);
+      await setDoc(cartRef, {
+        userId: currentUser.uid,
+        items: items,
+        updatedAt: new Date().toISOString()
+      });
+    } catch (error) {
+      console.error('Error saving cart:', error);
+      toast.error('Failed to save cart');
     }
-  }, [cartItems, currentUser]);
+  };
 
   // Add item to cart
-  const addToCart = (product, quantity = 1) => {
-    setCartItems(prevItems => {
-      const existingItem = prevItems.find(item => item.id === product.id);
-      
-      if (existingItem) {
-        toast.success('Cart updated!');
-        return prevItems.map(item =>
-          item.id === product.id
-            ? { ...item, quantity: item.quantity + quantity }
-            : item
-        );
-      } else {
-        toast.success('Added to cart!', { icon: '🛒' });
-        return [...prevItems, { ...product, quantity }];
-      }
-    });
+  const addToCart = async (product, quantity = 1) => {
+    if (!currentUser) {
+      toast.error('Please login to add items to cart');
+      return;
+    }
+
+    const existingItem = cartItems.find(item => item.id === product.id);
+    
+    let newCartItems;
+    if (existingItem) {
+      newCartItems = cartItems.map(item =>
+        item.id === product.id
+          ? { ...item, quantity: item.quantity + quantity }
+          : item
+      );
+      toast.success('Cart updated!', { icon: '🛒' });
+    } else {
+      newCartItems = [...cartItems, { ...product, quantity }];
+      toast.success('Added to cart!', { icon: '✅' });
+    }
+    
+    setCartItems(newCartItems);
+    await saveCart(newCartItems);
   };
 
   // Remove item from cart
-  const removeFromCart = (productId) => {
-    setCartItems(prevItems => prevItems.filter(item => item.id !== productId));
+  const removeFromCart = async (productId) => {
+    const newCartItems = cartItems.filter(item => item.id !== productId);
+    setCartItems(newCartItems);
+    await saveCart(newCartItems);
     toast.success('Item removed from cart');
   };
 
   // Update item quantity
-  const updateQuantity = (productId, quantity) => {
+  const updateQuantity = async (productId, quantity) => {
     if (quantity <= 0) {
-      removeFromCart(productId);
+      await removeFromCart(productId);
       return;
     }
 
-    setCartItems(prevItems =>
-      prevItems.map(item =>
-        item.id === productId ? { ...item, quantity } : item
-      )
+    const newCartItems = cartItems.map(item =>
+      item.id === productId ? { ...item, quantity } : item
     );
+    
+    setCartItems(newCartItems);
+    await saveCart(newCartItems);
+  };
+
+  // Increment quantity
+  const incrementQuantity = async (productId) => {
+    const item = cartItems.find(i => i.id === productId);
+    if (item) {
+      await updateQuantity(productId, item.quantity + 1);
+    }
+  };
+
+  // Decrement quantity
+  const decrementQuantity = async (productId) => {
+    const item = cartItems.find(i => i.id === productId);
+    if (item) {
+      await updateQuantity(productId, item.quantity - 1);
+    }
   };
 
   // Clear entire cart
-  const clearCart = () => {
-    setCartItems([]);
-    if (currentUser) {
-      localStorage.removeItem(`cart_${currentUser.uid}`);
+  const clearCart = async () => {
+    if (!currentUser) return;
+
+    try {
+      const cartRef = doc(db, 'carts', currentUser.uid);
+      await deleteDoc(cartRef);
+      setCartItems([]);
+      toast.success('Cart cleared');
+    } catch (error) {
+      console.error('Error clearing cart:', error);
+      toast.error('Failed to clear cart');
     }
-    toast.success('Cart cleared');
   };
 
   // Get cart total
@@ -114,17 +176,27 @@ export function CartProvider({ children }) {
     return cartItems.some(item => item.id === productId);
   };
 
+  // Get item quantity
+  const getItemQuantity = (productId) => {
+    const item = cartItems.find(i => i.id === productId);
+    return item ? item.quantity : 0;
+  };
+
   const value = {
     cartItems,
+    loading,
     addToCart,
     removeFromCart,
     updateQuantity,
+    incrementQuantity,
+    decrementQuantity,
     clearCart,
     getCartTotal,
     getCartCount,
     getRetailTotal,
     getTotalSavings,
-    isInCart
+    isInCart,
+    getItemQuantity
   };
 
   return (
