@@ -1,3 +1,4 @@
+/* src/index.css - Enhanced Mobile Responsive Styles */
 
 @tailwind base;
 @tailwind components;
@@ -14,16 +15,30 @@
       sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    @apply text-gray-900;
+  }
+
+  /* Better touch targets for mobile */
+  button, a {
+    @apply touch-manipulation;
+  }
+
+  /* Prevent text size adjustment on mobile */
+  * {
+    -webkit-text-size-adjust: 100%;
+    -moz-text-size-adjust: 100%;
+    -ms-text-size-adjust: 100%;
   }
 }
 
 @layer components {
   .btn {
-    @apply px-4 py-2 rounded-lg font-medium transition-colors duration-200;
+    @apply px-4 py-2 rounded-lg font-medium transition-all duration-200 touch-manipulation;
+    min-height: 44px; /* iOS recommended touch target */
   }
   
   .btn-primary {
-    @apply bg-green-600 text-white hover:bg-green-700;
+    @apply bg-gradient-to-r from-green-600 to-emerald-600 text-white hover:shadow-lg transform hover:-translate-y-0.5;
   }
   
   .btn-secondary {
@@ -31,15 +46,16 @@
   }
   
   .btn-outline {
-    @apply border border-green-600 text-green-600 hover:bg-green-600 hover:text-white;
+    @apply border-2 border-green-600 text-green-600 hover:bg-green-600 hover:text-white;
   }
   
   .input {
     @apply w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500;
+    min-height: 44px; /* iOS recommended touch target */
   }
   
   .card {
-    @apply bg-white rounded-lg shadow-md p-6;
+    @apply bg-white rounded-xl shadow-md p-4 sm:p-6;
   }
   
   .badge {
@@ -57,15 +73,40 @@
   .badge-error {
     @apply bg-red-100 text-red-800;
   }
+
+  /* Container with proper mobile padding */
+  .container-mobile {
+    @apply px-4 sm:px-6 lg:px-8 mx-auto max-w-7xl;
+  }
 }
 
 @layer utilities {
   .text-gradient {
-    @apply bg-gradient-to-r from-green-600 to-green-700 bg-clip-text text-transparent;
+    @apply bg-gradient-to-r from-green-600 to-emerald-700 bg-clip-text text-transparent;
   }
   
   .shadow-custom {
     box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  }
+
+  /* Hide scrollbar but keep functionality */
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Touch-friendly scrolling */
+  .scroll-touch {
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Prevent tap highlight */
+  .no-tap-highlight {
+    -webkit-tap-highlight-color: transparent;
   }
 }
 
@@ -85,6 +126,21 @@
   animation: fadeIn 0.3s ease-out;
 }
 
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-slide-up {
+  animation: slideUp 0.4s ease-out;
+}
+
 /* Loading spinner */
 .spinner {
   border: 2px solid #f3f3f3;
@@ -98,9 +154,30 @@
   100% { transform: rotate(360deg); }
 }
 
-/* Custom scrollbar */
+/* Pulse animation for badges */
+@keyframes pulse-ring {
+  0% {
+    transform: scale(0.95);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1);
+    opacity: 0.7;
+  }
+  100% {
+    transform: scale(0.95);
+    opacity: 1;
+  }
+}
+
+.animate-pulse-ring {
+  animation: pulse-ring 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* Custom scrollbar for desktop */
 ::-webkit-scrollbar {
   width: 6px;
+  height: 6px;
 }
 
 ::-webkit-scrollbar-track {
@@ -115,4 +192,99 @@
 
 ::-webkit-scrollbar-thumb:hover {
   background: #a8a8a8;
+}
+
+/* Mobile specific fixes */
+@media (max-width: 640px) {
+  /* Prevent zoom on input focus (iOS) */
+  input[type="text"],
+  input[type="email"],
+  input[type="password"],
+  input[type="tel"],
+  input[type="number"],
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
+
+  /* Better spacing for mobile */
+  .mobile-spacing {
+    @apply space-y-3;
+  }
+
+  /* Larger touch targets */
+  button,
+  a,
+  input[type="button"],
+  input[type="submit"] {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}
+
+/* Tablet specific */
+@media (min-width: 641px) and (max-width: 1024px) {
+  .tablet-grid {
+    @apply grid-cols-2;
+  }
+}
+
+/* Smooth transitions for all interactive elements */
+button,
+a,
+.card,
+input,
+select {
+  @apply transition-all duration-200;
+}
+
+/* Focus states for accessibility */
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  @apply outline-none ring-2 ring-green-500 ring-offset-2;
+}
+
+/* Disabled state */
+button:disabled,
+input:disabled,
+select:disabled {
+  @apply opacity-50 cursor-not-allowed;
+}
+
+/* Loading states */
+.loading {
+  @apply relative pointer-events-none;
+}
+
+.loading::after {
+  content: '';
+  @apply absolute inset-0 bg-white/50 rounded-lg flex items-center justify-center;
+}
+
+/* Toast notification positioning for mobile */
+@media (max-width: 640px) {
+  .Toaster {
+    top: 60px !important;
+  }
+}
+
+/* Safe area insets for notched devices */
+@supports (padding: max(0px)) {
+  body {
+    padding-left: max(0px, env(safe-area-inset-left));
+    padding-right: max(0px, env(safe-area-inset-right));
+  }
+}
+
+/* Prevent pull-to-refresh on iOS */
+body {
+  overscroll-behavior-y: contain;
+}
+
+/* Better image rendering */
+img {
+  image-rendering: -webkit-optimize-contrast;
+  image-rendering: crisp-edges;
 }

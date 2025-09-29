@@ -1,10 +1,9 @@
-// src/services/groupService.js
+// src/services/groupService.js - Complete Service File with All Exports
 import { 
   collection, 
   doc, 
   addDoc, 
   updateDoc, 
-  deleteDoc, 
   getDocs, 
   getDoc, 
   query, 
@@ -13,11 +12,15 @@ import {
   onSnapshot,
   arrayUnion,
   arrayRemove,
-  serverTimestamp 
+  serverTimestamp,
+  increment
 } from 'firebase/firestore';
-import { ref, onValue, set, push, remove } from 'firebase/database';
+import { ref, onValue, push } from 'firebase/database';
 import { db, rtdb } from '../config/firebase';
 
+// ============================================
+// GROUP SERVICE
+// ============================================
 export const groupService = {
   // Create new group
   async createGroup(groupData) {
@@ -28,7 +31,9 @@ export const groupService = {
         updatedAt: serverTimestamp(),
         members: [groupData.createdBy],
         isActive: true,
-        currentOrders: []
+        currentOrders: [],
+        totalOrders: 0,
+        totalSavings: 0
       });
       return docRef.id;
     } catch (error) {
@@ -38,7 +43,7 @@ export const groupService = {
   },
 
   // Get groups by location
-  async getGroupsByLocation(latitude, longitude, radius = 3) {
+  async getGroupsByLocation(latitude, longitude, radius = 5) {
     try {
       const groupsRef = collection(db, 'groups');
       const q = query(
@@ -52,7 +57,7 @@ export const groupService = {
         id: doc.id,
         ...doc.data()
       })).filter(group => {
-        // Simple distance calculation (you might want to use a proper geospatial library)
+        if (!group.location) return true;
         const distance = calculateDistance(
           latitude, longitude,
           group.location.latitude, group.location.longitude
@@ -65,14 +70,52 @@ export const groupService = {
     }
   },
 
+  // Get user's groups
+  async getUserGroups(userId) {
+    try {
+      const groupsRef = collection(db, 'groups');
+      const q = query(
+        groupsRef,
+        where('members', 'array-contains', userId),
+        where('isActive', '==', true)
+      );
+      const snapshot = await getDocs(q);
+      
+      return snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+    } catch (error) {
+      console.error('Error fetching user groups:', error);
+      throw error;
+    }
+  },
+
   // Join group
   async joinGroup(groupId, userId) {
     try {
       const groupRef = doc(db, 'groups', groupId);
+      const groupDoc = await getDoc(groupRef);
+      
+      if (!groupDoc.exists()) {
+        throw new Error('Group not found');
+      }
+
+      const groupData = groupDoc.data();
+      
+      if (groupData.members?.includes(userId)) {
+        throw new Error('Already a member of this group');
+      }
+
+      if (groupData.maxMembers && groupData.members?.length >= groupData.maxMembers) {
+        throw new Error('Group is full');
+      }
+
       await updateDoc(groupRef, {
         members: arrayUnion(userId),
         updatedAt: serverTimestamp()
       });
+      
       return true;
     } catch (error) {
       console.error('Error joining group:', error);
@@ -84,10 +127,23 @@ export const groupService = {
   async leaveGroup(groupId, userId) {
     try {
       const groupRef = doc(db, 'groups', groupId);
+      const groupDoc = await getDoc(groupRef);
+      
+      if (!groupDoc.exists()) {
+        throw new Error('Group not found');
+      }
+
+      const groupData = groupDoc.data();
+      
+      if (groupData.createdBy === userId) {
+        throw new Error('Group creator cannot leave the group');
+      }
+
       await updateDoc(groupRef, {
         members: arrayRemove(userId),
         updatedAt: serverTimestamp()
       });
+      
       return true;
     } catch (error) {
       console.error('Error leaving group:', error);
@@ -154,20 +210,9 @@ export const groupService = {
   }
 };
 
-// Helper function for distance calculation
-function calculateDistance(lat1, lon1, lat2, lon2) {
-  const R = 6371; // Radius of the Earth in kilometers
-  const dLat = (lat2 - lat1) * Math.PI / 180;
-  const dLon = (lon2 - lon1) * Math.PI / 180;
-  const a = 
-    Math.sin(dLat/2) * Math.sin(dLat/2) +
-    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
-    Math.sin(dLon/2) * Math.sin(dLon/2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-  return R * c;
-}
-
-// src/services/productService.js
+// ============================================
+// PRODUCT SERVICE
+// ============================================
 export const productService = {
   // Get all products
   async getProducts(category = null) {
@@ -198,7 +243,7 @@ export const productService = {
       return snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
-      }));
+      })).sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0));
     } catch (error) {
       console.error('Error fetching categories:', error);
       throw error;
@@ -212,7 +257,10 @@ export const productService = {
         ...productData,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
-        isActive: true
+        isActive: true,
+        views: 0,
+        favorites: 0,
+        sales: 0
       });
       return docRef.id;
     } catch (error) {
@@ -222,78 +270,238 @@ export const productService = {
   }
 };
 
-// src/services/orderService.js
+// ============================================
+// ORDER SERVICE  
+// ============================================
 export const orderService = {
-  // Create group order
-  async createGroupOrder(groupId, orderData) {
+  // Create individual order within a group
+  async createIndividualOrder(groupId, orderData) {
     try {
-      const docRef = await addDoc(collection(db, 'groupOrders'), {
-        groupId,
-        ...orderData,
-        status: 'collecting',
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-        participants: [],
-        totalAmount: 0,
-        minQuantityMet: false
-      });
+      // Check if there's an active group order
+      let groupOrderId = await this.getOrCreateActiveGroupOrder(groupId);
       
-      // Update group with current order
-      const groupRef = doc(db, 'groups', groupId);
-      await updateDoc(groupRef, {
-        currentOrders: arrayUnion(docRef.id),
+      // Create individual order
+      const orderRef = await addDoc(collection(db, 'orders'), {
+        groupId,
+        groupOrderId,
+        userId: orderData.userId,
+        userName: orderData.userName,
+        userEmail: orderData.userEmail,
+        userPhone: orderData.userPhone,
+        items: orderData.items,
+        totalAmount: orderData.totalAmount,
+        paymentStatus: 'pending',
+        orderStatus: 'placed',
+        createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
       });
-      
-      return docRef.id;
+
+      // Update group order with this participant
+      await this.addParticipantToGroupOrder(groupOrderId, {
+        userId: orderData.userId,
+        userName: orderData.userName,
+        orderId: orderRef.id,
+        amount: orderData.totalAmount,
+        items: orderData.items,
+        paymentStatus: 'pending',
+        joinedAt: serverTimestamp()
+      });
+
+      return orderRef.id;
     } catch (error) {
-      console.error('Error creating group order:', error);
+      console.error('Error creating individual order:', error);
       throw error;
     }
   },
 
-  // Join group order
-  async joinGroupOrder(orderId, userId, items, amount) {
+  // Get or create active group order
+  async getOrCreateActiveGroupOrder(groupId) {
     try {
-      const orderRef = doc(db, 'groupOrders', orderId);
+      const groupOrdersQuery = query(
+        collection(db, 'groupOrders'),
+        where('groupId', '==', groupId),
+        where('status', 'in', ['collecting', 'active']),
+        orderBy('createdAt', 'desc')
+      );
+      
+      const snapshot = await getDocs(groupOrdersQuery);
+      
+      if (!snapshot.empty) {
+        return snapshot.docs[0].id;
+      }
+
+      const groupOrderRef = await addDoc(collection(db, 'groupOrders'), {
+        groupId,
+        status: 'collecting',
+        participants: [],
+        totalAmount: 0,
+        totalParticipants: 0,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+        deliveryDate: null,
+        minQuantityMet: false
+      });
+
+      return groupOrderRef.id;
+    } catch (error) {
+      console.error('Error getting/creating group order:', error);
+      throw error;
+    }
+  },
+
+  // Add participant to group order
+  async addParticipantToGroupOrder(groupOrderId, participantData) {
+    try {
+      const groupOrderRef = doc(db, 'groupOrders', groupOrderId);
+      
+      await updateDoc(groupOrderRef, {
+        participants: arrayUnion(participantData),
+        totalAmount: increment(participantData.amount),
+        totalParticipants: increment(1),
+        updatedAt: serverTimestamp()
+      });
+
+      await this.checkMinimumQuantities(groupOrderId);
+    } catch (error) {
+      console.error('Error adding participant:', error);
+      throw error;
+    }
+  },
+
+  // Update payment status
+  async updatePaymentStatus(orderId, status) {
+    try {
+      const orderRef = doc(db, 'orders', orderId);
       const orderDoc = await getDoc(orderRef);
       
       if (!orderDoc.exists()) {
         throw new Error('Order not found');
       }
-      
+
       const orderData = orderDoc.data();
-      const updatedParticipants = [...orderData.participants, {
-        userId,
-        items,
-        amount,
-        joinedAt: new Date()
-      }];
       
       await updateDoc(orderRef, {
-        participants: updatedParticipants,
-        totalAmount: orderData.totalAmount + amount,
+        paymentStatus: status,
+        paidAt: status === 'paid' ? serverTimestamp() : null,
         updatedAt: serverTimestamp()
       });
-      
+
+      if (orderData.groupOrderId) {
+        await this.updateParticipantPaymentStatus(
+          orderData.groupOrderId,
+          orderData.userId,
+          status
+        );
+      }
+
       return true;
     } catch (error) {
-      console.error('Error joining group order:', error);
+      console.error('Error updating payment status:', error);
       throw error;
     }
   },
 
-  // Get user orders
+  // Update participant payment status
+  async updateParticipantPaymentStatus(groupOrderId, userId, status) {
+    try {
+      const groupOrderRef = doc(db, 'groupOrders', groupOrderId);
+      const groupOrderDoc = await getDoc(groupOrderRef);
+      
+      if (!groupOrderDoc.exists()) return;
+
+      const groupOrderData = groupOrderDoc.data();
+      const updatedParticipants = groupOrderData.participants.map(p =>
+        p.userId === userId ? { ...p, paymentStatus: status } : p
+      );
+
+      await updateDoc(groupOrderRef, {
+        participants: updatedParticipants,
+        updatedAt: serverTimestamp()
+      });
+
+      const allPaid = updatedParticipants.every(p => p.paymentStatus === 'paid');
+      if (allPaid) {
+        await updateDoc(groupOrderRef, {
+          status: 'confirmed',
+          confirmedAt: serverTimestamp()
+        });
+      }
+    } catch (error) {
+      console.error('Error updating participant payment:', error);
+      throw error;
+    }
+  },
+
+  // Check minimum quantities
+  async checkMinimumQuantities(groupOrderId) {
+    try {
+      const groupOrderRef = doc(db, 'groupOrders', groupOrderId);
+      const groupOrderDoc = await getDoc(groupOrderRef);
+      
+      if (!groupOrderDoc.exists()) return;
+
+      const groupOrderData = groupOrderDoc.data();
+      const productQuantities = {};
+
+      groupOrderData.participants.forEach(participant => {
+        participant.items.forEach(item => {
+          if (productQuantities[item.id]) {
+            productQuantities[item.id].quantity += item.quantity;
+          } else {
+            productQuantities[item.id] = {
+              quantity: item.quantity,
+              minQuantity: item.minQuantity || 1,
+              name: item.name
+            };
+          }
+        });
+      });
+
+      const allMinimumsMet = Object.values(productQuantities).every(
+        product => product.quantity >= product.minQuantity
+      );
+
+      await updateDoc(groupOrderRef, {
+        productQuantities,
+        minQuantityMet: allMinimumsMet,
+        updatedAt: serverTimestamp()
+      });
+    } catch (error) {
+      console.error('Error checking minimum quantities:', error);
+      throw error;
+    }
+  },
+
+  // Get group order details
+  async getGroupOrderDetails(groupOrderId) {
+    try {
+      const groupOrderRef = doc(db, 'groupOrders', groupOrderId);
+      const groupOrderDoc = await getDoc(groupOrderRef);
+      
+      if (!groupOrderDoc.exists()) {
+        throw new Error('Group order not found');
+      }
+
+      return {
+        id: groupOrderDoc.id,
+        ...groupOrderDoc.data()
+      };
+    } catch (error) {
+      console.error('Error fetching group order details:', error);
+      throw error;
+    }
+  },
+
+  // Get user's orders
   async getUserOrders(userId) {
     try {
-      const ordersRef = collection(db, 'groupOrders');
-      const q = query(
-        ordersRef,
-        where('participants', 'array-contains-any', [{ userId }]),
+      const ordersQuery = query(
+        collection(db, 'orders'),
+        where('userId', '==', userId),
         orderBy('createdAt', 'desc')
       );
       
-      const snapshot = await getDocs(q);
+      const snapshot = await getDocs(ordersQuery);
       return snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
@@ -304,28 +512,28 @@ export const orderService = {
     }
   },
 
-  // Update order status
-  async updateOrderStatus(orderId, status) {
-    try {
-      const orderRef = doc(db, 'groupOrders', orderId);
-      await updateDoc(orderRef, {
-        status,
-        updatedAt: serverTimestamp()
-      });
-      return true;
-    } catch (error) {
-      console.error('Error updating order status:', error);
-      throw error;
-    }
-  },
-
   // Subscribe to group order updates
-  subscribeToGroupOrder(orderId, callback) {
-    const orderRef = doc(db, 'groupOrders', orderId);
-    return onSnapshot(orderRef, (doc) => {
+  subscribeToGroupOrder(groupOrderId, callback) {
+    const groupOrderRef = doc(db, 'groupOrders', groupOrderId);
+    return onSnapshot(groupOrderRef, (doc) => {
       if (doc.exists()) {
         callback({ id: doc.id, ...doc.data() });
       }
     });
   }
 };
+
+// ============================================
+// HELPER FUNCTIONS
+// ============================================
+function calculateDistance(lat1, lon1, lat2, lon2) {
+  const R = 6371; // Radius of the Earth in kilometers
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = 
+    Math.sin(dLat/2) * Math.sin(dLat/2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+    Math.sin(dLon/2) * Math.sin(dLon/2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  return R * c;
+}

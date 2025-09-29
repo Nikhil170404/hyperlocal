@@ -1,7 +1,8 @@
-// src/App.jsx - Enhanced Version
+// src/App.jsx - Final with CartProvider
 import React, { Suspense, lazy } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { CartProvider } from './contexts/CartContext';
 import Navbar from './components/Navbar';
 import LoadingSpinner from './components/LoadingSpinner';
 
@@ -10,7 +11,7 @@ import Home from './pages/Home';
 import Login from './pages/Login';
 import Register from './pages/Register';
 
-// Lazy load other components for better performance
+// Lazy load other components
 const Groups = lazy(() => import('./pages/Groups'));
 const GroupDetail = lazy(() => import('./pages/GroupDetail'));
 const Products = lazy(() => import('./pages/Products'));
@@ -18,8 +19,9 @@ const Cart = lazy(() => import('./pages/Cart'));
 const Orders = lazy(() => import('./pages/Orders'));
 const Profile = lazy(() => import('./pages/Profile'));
 const AdminDashboard = lazy(() => import('./pages/AdminDashboard'));
+const GroupOrderDetail = lazy(() => import('./pages/GroupOrderDetail'));
 
-// Loading fallback component
+// Loading fallback
 function PageLoader() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50">
@@ -56,7 +58,7 @@ function AdminRoute({ children }) {
 
 // App Content Component
 function AppContent() {
-  const { currentUser, userProfile } = useAuth();
+  const { currentUser } = useAuth();
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -118,6 +120,14 @@ function AppContent() {
               } 
             />
             <Route 
+              path="/orders/:orderId" 
+              element={
+                <ProtectedRoute>
+                  <GroupOrderDetail />
+                </ProtectedRoute>
+              } 
+            />
+            <Route 
               path="/profile" 
               element={
                 <ProtectedRoute>
@@ -143,12 +153,12 @@ function AppContent() {
               path="*" 
               element={
                 <div className="min-h-screen flex items-center justify-center bg-gray-50">
-                  <div className="text-center">
-                    <h1 className="text-6xl font-bold text-gray-800 mb-4">404</h1>
-                    <p className="text-xl text-gray-600 mb-6">Page not found</p>
+                  <div className="text-center px-4">
+                    <h1 className="text-4xl sm:text-6xl font-bold text-gray-800 mb-4">404</h1>
+                    <p className="text-lg sm:text-xl text-gray-600 mb-6">Page not found</p>
                     <a 
                       href="/" 
-                      className="inline-block px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition"
+                      className="inline-block px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition text-sm sm:text-base"
                     >
                       Go Home
                     </a>
@@ -168,7 +178,9 @@ function App() {
   return (
     <Router future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <AuthProvider>
-        <AppContent />
+        <CartProvider>
+          <AppContent />
+        </CartProvider>
       </AuthProvider>
     </Router>
   );
