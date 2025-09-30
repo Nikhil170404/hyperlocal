@@ -1,4 +1,4 @@
-// src/services/groupService.js - WITH PAYMENT WINDOW & TIMER LOGIC
+// src/services/groupService.js - COMPLETE REFACTOR WITH TIMER SYSTEM
 import { 
   collection, 
   doc, 
@@ -16,13 +16,22 @@ import {
   runTransaction,
   writeBatch,
   increment,
-  deleteDoc
+  deleteDoc,
+  Timestamp
 } from 'firebase/firestore';
 import { db } from '../config/firebase';
+import toast from 'react-hot-toast';
 
-// Constants
-const PAYMENT_WINDOW_DURATION = 4 * 60 * 60 * 1000; // 4 hours in milliseconds
+// ============================================
+// CONSTANTS
+// ============================================
+const COLLECTING_PHASE_DURATION = 4 * 60 * 60 * 1000; // 4 hours
+const PAYMENT_WINDOW_DURATION = 4 * 60 * 60 * 1000; // 4 hours
+const SUSPENSION_DAYS = 3;
 
+// ============================================
+// HELPER FUNCTIONS
+// ============================================
 function calculateDistance(lat1, lon1, lat2, lon2) {
   const R = 6371;
   const dLat = (lat2 - lat1) * Math.PI / 180;
@@ -35,6 +44,9 @@ function calculateDistance(lat1, lon1, lat2, lon2) {
   return R * c;
 }
 
+// ============================================
+// GROUP SERVICE
+// ============================================
 export const groupService = {
   async createGroup(groupData) {
     try {
@@ -44,8 +56,12 @@ export const groupService = {
         updatedAt: serverTimestamp(),
         members: [groupData.createdBy],
         isActive: true,
-        currentOrders: [],
-        totalOrders: 0
+        currentOrderCycle: null,
+        stats: {
+          totalOrders: 0,
+          totalMembers: 1,
+          totalSavings: 0
+        }
       });
       return docRef.id;
     } catch (error) {
@@ -54,7 +70,7 @@ export const groupService = {
     }
   },
 
-  async getGroupsByLocation(latitude, longitude, radius = 5) {
+  async getGroupsByLocation(latitude, longitude, radius = 50) {
     try {
       const groupsRef = collection(db, 'groups');
       const q = query(groupsRef, where('isActive', '==', true));
@@ -95,6 +111,12 @@ export const groupService = {
 
   async joinGroup(groupId, userId) {
     try {
+      // Check if user is suspended
+      const isSuspended = await this.checkUserSuspension(userId);
+      if (isSuspended) {
+        throw new Error('Your account is suspended. You cannot join groups at this time.');
+      }
+
       return await runTransaction(db, async (transaction) => {
         const groupRef = doc(db, 'groups', groupId);
         const groupDoc = await transaction.get(groupRef);
@@ -108,6 +130,7 @@ export const groupService = {
         
         transaction.update(groupRef, {
           members: arrayUnion(userId),
+          'stats.totalMembers': increment(1),
           updatedAt: serverTimestamp()
         });
         
@@ -134,6 +157,7 @@ export const groupService = {
         
         transaction.update(groupRef, {
           members: arrayRemove(userId),
+          'stats.totalMembers': increment(-1),
           updatedAt: serverTimestamp()
         });
         
@@ -161,9 +185,72 @@ export const groupService = {
     return onSnapshot(groupRef, (doc) => {
       if (doc.exists()) callback({ id: doc.id, ...doc.data() });
     });
+  },
+
+  // Check if user is suspended
+  async checkUserSuspension(userId) {
+    try {
+      const userRef = doc(db, 'users', userId);
+      const userDoc = await getDoc(userRef);
+      
+      if (!userDoc.exists()) return false;
+      
+      const userData = userDoc.data();
+      if (!userData.suspendedUntil) return false;
+      
+      const now = Date.now();
+      const suspendedUntil = userData.suspendedUntil.toMillis?.() || userData.suspendedUntil;
+      
+      if (suspendedUntil > now) {
+        return true; // Still suspended
+      } else {
+        // Suspension expired, clear it
+        await updateDoc(userRef, {
+          suspendedUntil: null,
+          suspensionReason: null,
+          updatedAt: serverTimestamp()
+        });
+        return false;
+      }
+    } catch (error) {
+      console.error('Error checking suspension:', error);
+      return false;
+    }
+  },
+
+  // Suspend user
+  async suspendUser(userId, reason = 'Payment default') {
+    try {
+      const suspendUntil = Date.now() + (SUSPENSION_DAYS * 24 * 60 * 60 * 1000);
+      
+      await updateDoc(doc(db, 'users', userId), {
+        suspendedUntil: Timestamp.fromMillis(suspendUntil),
+        suspensionReason: reason,
+        suspensionCount: increment(1),
+        updatedAt: serverTimestamp()
+      });
+
+      // Log suspension
+      await addDoc(collection(db, 'suspensions'), {
+        userId,
+        reason,
+        suspendedAt: serverTimestamp(),
+        suspendedUntil: Timestamp.fromMillis(suspendUntil),
+        days: SUSPENSION_DAYS
+      });
+
+      console.log(`⚠️ User ${userId} suspended for ${SUSPENSION_DAYS} days`);
+      return true;
+    } catch (error) {
+      console.error('Error suspending user:', error);
+      throw error;
+    }
   }
 };
 
+// ============================================
+// PRODUCT SERVICE
+// ============================================
 export const productService = {
   async getProducts(category = null) {
     try {
@@ -196,318 +283,402 @@ export const productService = {
   }
 };
 
+// ============================================
+// ORDER SERVICE - COMPLETE REFACTOR
+// ============================================
 export const orderService = {
   /**
-   * Create individual order
+   * Start a new order cycle for a group
    */
-  async createIndividualOrder(groupId, orderData) {
+  async startOrderCycle(groupId) {
     try {
-      console.log('📦 Creating order for:', orderData.userName);
-      
-      const groupOrderId = await this.getOrCreateActiveGroupOrder(groupId);
-      
-      const orderRef = await addDoc(collection(db, 'orders'), {
+      const now = Date.now();
+      const collectingEndsAt = now + COLLECTING_PHASE_DURATION;
+
+      const cycleRef = await addDoc(collection(db, 'orderCycles'), {
         groupId,
-        groupOrderId,
-        userId: orderData.userId,
-        userName: orderData.userName || '',
-        userEmail: orderData.userEmail || '',
-        userPhone: orderData.userPhone || '',
-        items: orderData.items,
-        totalAmount: orderData.totalAmount || 0,
-        paymentStatus: 'pending',
-        orderStatus: 'placed',
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-        expiresAt: null // Will be set when payment window opens
-      });
-
-      await this.addParticipantToGroupOrder(groupOrderId, {
-        userId: orderData.userId,
-        userName: orderData.userName || 'User',
-        orderId: orderRef.id,
-        amount: orderData.totalAmount || 0,
-        items: orderData.items,
-        paymentStatus: 'pending',
-        joinedAt: Date.now()
-      });
-
-      return orderRef.id;
-    } catch (error) {
-      console.error('Error creating order:', error);
-      throw error;
-    }
-  },
-
-  /**
-   * Get or create active group order
-   */
-  async getOrCreateActiveGroupOrder(groupId) {
-    try {
-      const q = query(
-        collection(db, 'groupOrders'),
-        where('groupId', '==', groupId),
-        where('status', 'in', ['collecting', 'active', 'payment_window'])
-      );
-      
-      const snapshot = await getDocs(q);
-      
-      if (!snapshot.empty) {
-        return snapshot.docs[0].id;
-      }
-
-      const groupOrderRef = await addDoc(collection(db, 'groupOrders'), {
-        groupId,
-        status: 'collecting',
+        phase: 'collecting', // collecting -> payment_window -> confirmed -> processing -> completed
+        collectingStartedAt: Timestamp.fromMillis(now),
+        collectingEndsAt: Timestamp.fromMillis(collectingEndsAt),
+        paymentWindowStartedAt: null,
+        paymentWindowEndsAt: null,
         participants: [],
-        totalAmount: 0,
+        productOrders: {}, // { productId: { quantity, participants: [], minQuantity, metMinimum: false } }
         totalParticipants: 0,
-        productQuantities: {},
-        minQuantityMet: false,
-        allPaid: false,
-        paymentProgress: 0,
-        paymentWindow: {
-          isActive: false,
-          startedAt: null,
-          expiresAt: null
-        },
+        totalAmount: 0,
+        status: 'active',
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
       });
 
-      return groupOrderRef.id;
+      // Update group with current cycle
+      await updateDoc(doc(db, 'groups', groupId), {
+        currentOrderCycle: cycleRef.id,
+        updatedAt: serverTimestamp()
+      });
+
+      // Schedule collecting phase end
+      this.scheduleCollectingPhaseEnd(cycleRef.id, collectingEndsAt);
+
+      console.log(`✅ Order cycle ${cycleRef.id} started for group ${groupId}`);
+      return cycleRef.id;
     } catch (error) {
-      console.error('Error in getOrCreateActiveGroupOrder:', error);
+      console.error('Error starting order cycle:', error);
       throw error;
     }
   },
 
   /**
-   * Add participant and check if payment window should open
+   * Get or create active order cycle
    */
-  async addParticipantToGroupOrder(groupOrderId, participantData) {
+  async getOrCreateOrderCycle(groupId) {
     try {
-      return await runTransaction(db, async (transaction) => {
-        const groupOrderRef = doc(db, 'groupOrders', groupOrderId);
-        const groupOrderDoc = await transaction.get(groupOrderRef);
+      // Check for active cycle
+      const cyclesQuery = query(
+        collection(db, 'orderCycles'),
+        where('groupId', '==', groupId),
+        where('phase', 'in', ['collecting', 'payment_window']),
+        orderBy('createdAt', 'desc')
+      );
+      
+      const snapshot = await getDocs(cyclesQuery);
+      
+      if (!snapshot.empty) {
+        const cycle = { id: snapshot.docs[0].id, ...snapshot.docs[0].data() };
         
-        if (!groupOrderDoc.exists()) throw new Error('Group order not found');
+        // Check if collecting phase expired
+        const now = Date.now();
+        const collectingEndsAt = cycle.collectingEndsAt?.toMillis() || 0;
+        
+        if (cycle.phase === 'collecting' && now > collectingEndsAt) {
+          // Transition to payment window or cancel
+          await this.endCollectingPhase(cycle.id);
+          // Recursively get the updated cycle
+          return await this.getOrCreateOrderCycle(groupId);
+        }
+        
+        return cycle.id;
+      }
 
-        const currentData = groupOrderDoc.data();
-        let participants = currentData.participants || [];
+      // Create new cycle
+      return await this.startOrderCycle(groupId);
+    } catch (error) {
+      console.error('Error getting/creating order cycle:', error);
+      throw error;
+    }
+  },
+
+  /**
+   * Add user order to cycle
+   */
+  async addOrderToCycle(cycleId, orderData) {
+    try {
+      // Check if user is suspended
+      const isSuspended = await groupService.checkUserSuspension(orderData.userId);
+      if (isSuspended) {
+        throw new Error('Your account is suspended. You cannot place orders.');
+      }
+
+      return await runTransaction(db, async (transaction) => {
+        const cycleRef = doc(db, 'orderCycles', cycleId);
+        const cycleDoc = await transaction.get(cycleRef);
         
-        const existingIndex = participants.findIndex(
-          p => p.userId === participantData.userId
-        );
+        if (!cycleDoc.exists()) throw new Error('Order cycle not found');
+        
+        const cycle = cycleDoc.data();
+        
+        // Check phase
+        if (cycle.phase !== 'collecting') {
+          throw new Error('Order cycle is not accepting new orders');
+        }
+
+        // Check time
+        const now = Date.now();
+        const collectingEndsAt = cycle.collectingEndsAt?.toMillis() || 0;
+        if (now > collectingEndsAt) {
+          throw new Error('Collecting phase has ended');
+        }
+
+        // Update participants
+        let participants = cycle.participants || [];
+        const existingIndex = participants.findIndex(p => p.userId === orderData.userId);
+        
+        const participantData = {
+          userId: orderData.userId,
+          userName: orderData.userName,
+          userEmail: orderData.userEmail,
+          userPhone: orderData.userPhone,
+          items: orderData.items,
+          totalAmount: orderData.totalAmount,
+          paymentStatus: 'pending',
+          orderStatus: 'placed',
+          joinedAt: Timestamp.fromMillis(Date.now())
+        };
 
         if (existingIndex >= 0) {
-          participants[existingIndex] = {
-            ...participants[existingIndex],
-            ...participantData,
-            updatedAt: Date.now()
-          };
+          participants[existingIndex] = participantData;
         } else {
           participants.push(participantData);
         }
 
-        // Aggregate product quantities
-        const productQuantities = {};
-        
+        // Aggregate product orders
+        const productOrders = {};
         participants.forEach(participant => {
-          (participant.items || []).forEach(item => {
-            if (!item.id) return;
-            
-            if (productQuantities[item.id]) {
-              productQuantities[item.id].quantity += item.quantity;
-              productQuantities[item.id].totalValue += (item.groupPrice * item.quantity);
-              productQuantities[item.id].participants.push({
-                userId: participant.userId,
-                userName: participant.userName,
-                quantity: item.quantity
-              });
-            } else {
-              productQuantities[item.id] = {
-                quantity: item.quantity,
-                minQuantity: item.minQuantity || 50,
+          participant.items.forEach(item => {
+            if (!productOrders[item.id]) {
+              productOrders[item.id] = {
+                productId: item.id,
                 name: item.name,
                 price: item.groupPrice,
-                retailPrice: item.retailPrice || item.groupPrice,
-                totalValue: item.groupPrice * item.quantity,
-                participants: [{
-                  userId: participant.userId,
-                  userName: participant.userName,
-                  quantity: item.quantity
-                }]
+                retailPrice: item.retailPrice,
+                minQuantity: item.minQuantity || 50,
+                quantity: 0,
+                totalValue: 0,
+                participants: [],
+                metMinimum: false
               };
             }
+            
+            productOrders[item.id].quantity += item.quantity;
+            productOrders[item.id].totalValue += item.groupPrice * item.quantity;
+            productOrders[item.id].participants.push({
+              userId: participant.userId,
+              userName: participant.userName,
+              quantity: item.quantity
+            });
+            productOrders[item.id].metMinimum = 
+              productOrders[item.id].quantity >= productOrders[item.id].minQuantity;
           });
         });
 
-        // Check if ALL products meet minimum
-        const minQuantityMet = Object.keys(productQuantities).length > 0 &&
-          Object.values(productQuantities).every(p => p.quantity >= p.minQuantity);
+        const totalAmount = participants.reduce((sum, p) => sum + (p.totalAmount || 0), 0);
 
-        const totalAmount = participants.reduce((sum, p) => sum + (p.amount || 0), 0);
-        const paidCount = participants.filter(p => p.paymentStatus === 'paid').length;
-        const allPaid = paidCount === participants.length && participants.length > 0;
-
-        // Payment window logic
-        let paymentWindow = currentData.paymentWindow || { isActive: false };
-        let status = currentData.status;
-
-        if (minQuantityMet && !paymentWindow.isActive) {
-          // Open payment window
-          const now = Date.now();
-          paymentWindow = {
-            isActive: true,
-            startedAt: now,
-            expiresAt: now + PAYMENT_WINDOW_DURATION
-          };
-          status = 'payment_window';
-          
-          console.log('✅ Payment window opened! Expires at:', new Date(paymentWindow.expiresAt));
-          
-          // Schedule cleanup job
-          this.schedulePaymentWindowCleanup(groupOrderId, paymentWindow.expiresAt);
-        }
-
-        if (allPaid && minQuantityMet) {
-          status = 'confirmed';
-        } else if (paidCount > 0 && paymentWindow.isActive) {
-          status = 'active';
-        }
-
-        transaction.update(groupOrderRef, {
+        transaction.update(cycleRef, {
           participants,
-          totalAmount,
+          productOrders,
           totalParticipants: participants.length,
-          productQuantities,
-          minQuantityMet,
-          allPaid,
-          paymentProgress: participants.length > 0 ? Math.round((paidCount / participants.length) * 100) : 0,
-          status,
-          paymentWindow,
+          totalAmount,
           updatedAt: serverTimestamp()
         });
 
-        return true;
+        return cycleId;
       });
     } catch (error) {
-      console.error('Error adding participant:', error);
+      console.error('Error adding order to cycle:', error);
       throw error;
     }
   },
 
   /**
-   * Schedule cleanup for expired payment window
+   * End collecting phase and transition to payment window or cancel
    */
-  schedulePaymentWindowCleanup(groupOrderId, expiresAt) {
-    const delay = expiresAt - Date.now();
-    
-    if (delay > 0) {
-      setTimeout(async () => {
-        await this.cleanupExpiredPaymentWindow(groupOrderId);
-      }, delay);
+  async endCollectingPhase(cycleId) {
+    try {
+      console.log(`⏰ Ending collecting phase for cycle ${cycleId}`);
+      
+      const cycleRef = doc(db, 'orderCycles', cycleId);
+      const cycleDoc = await getDoc(cycleRef);
+      
+      if (!cycleDoc.exists()) return;
+      
+      const cycle = cycleDoc.data();
+      const productOrders = cycle.productOrders || {};
+      
+      // Check which products met minimum
+      const productsMetMinimum = Object.values(productOrders).filter(p => p.metMinimum);
+      const productsNotMetMinimum = Object.values(productOrders).filter(p => !p.metMinimum);
+      
+      console.log(`✅ Products met minimum: ${productsMetMinimum.length}`);
+      console.log(`❌ Products NOT met minimum: ${productsNotMetMinimum.length}`);
+
+      if (productsMetMinimum.length === 0) {
+        // No products met minimum - cancel entire cycle
+        await updateDoc(cycleRef, {
+          phase: 'cancelled',
+          status: 'cancelled',
+          cancelReason: 'No products met minimum quantity',
+          cancelledAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
+        });
+
+        toast.error('Order cycle cancelled - minimum quantities not met', { duration: 5000 });
+        return;
+      }
+
+      // Remove products that didn't meet minimum
+      const filteredProductOrders = {};
+      const filteredParticipants = cycle.participants.map(participant => {
+        const filteredItems = participant.items.filter(item => 
+          productOrders[item.id]?.metMinimum
+        );
+        
+        const newTotalAmount = filteredItems.reduce(
+          (sum, item) => sum + (item.groupPrice * item.quantity), 
+          0
+        );
+
+        return {
+          ...participant,
+          items: filteredItems,
+          totalAmount: newTotalAmount
+        };
+      }).filter(p => p.items.length > 0); // Remove participants with no valid items
+
+      // Rebuild product orders
+      filteredParticipants.forEach(participant => {
+        participant.items.forEach(item => {
+          if (!filteredProductOrders[item.id]) {
+            filteredProductOrders[item.id] = productOrders[item.id];
+          }
+        });
+      });
+
+      // Start payment window
+      const now = Date.now();
+      const paymentWindowEndsAt = now + PAYMENT_WINDOW_DURATION;
+
+      await updateDoc(cycleRef, {
+        phase: 'payment_window',
+        participants: filteredParticipants,
+        productOrders: filteredProductOrders,
+        totalParticipants: filteredParticipants.length,
+        totalAmount: filteredParticipants.reduce((sum, p) => sum + p.totalAmount, 0),
+        paymentWindowStartedAt: Timestamp.fromMillis(now),
+        paymentWindowEndsAt: Timestamp.fromMillis(paymentWindowEndsAt),
+        updatedAt: serverTimestamp()
+      });
+
+      // Schedule payment window end
+      this.schedulePaymentWindowEnd(cycleId, paymentWindowEndsAt);
+
+      // Notify users
+      toast.success(`Payment window opened! You have 4 hours to complete payment.`, {
+        duration: 10000,
+        icon: '💳'
+      });
+
+      console.log(`✅ Payment window opened for cycle ${cycleId}`);
+    } catch (error) {
+      console.error('Error ending collecting phase:', error);
     }
   },
 
   /**
-   * Clean up expired payment window - remove unpaid orders
+   * End payment window and process payments
    */
-  async cleanupExpiredPaymentWindow(groupOrderId) {
+  async endPaymentWindow(cycleId) {
     try {
-      console.log('🧹 Cleaning up expired payment window:', groupOrderId);
+      console.log(`⏰ Ending payment window for cycle ${cycleId}`);
       
-      const groupOrderRef = doc(db, 'groupOrders', groupOrderId);
-      const groupOrderDoc = await getDoc(groupOrderRef);
+      const cycleRef = doc(db, 'orderCycles', cycleId);
+      const cycleDoc = await getDoc(cycleRef);
       
-      if (!groupOrderDoc.exists()) return;
-
-      const data = groupOrderDoc.data();
+      if (!cycleDoc.exists()) return;
       
-      // Check if already confirmed or cancelled
-      if (data.status === 'confirmed' || data.status === 'cancelled') {
-        return;
-      }
+      const cycle = cycleDoc.data();
+      const participants = cycle.participants || [];
+      
+      const paidParticipants = participants.filter(p => p.paymentStatus === 'paid');
+      const unpaidParticipants = participants.filter(p => p.paymentStatus !== 'paid');
+      
+      console.log(`✅ Paid: ${paidParticipants.length}, ❌ Unpaid: ${unpaidParticipants.length}`);
 
-      // Remove unpaid participants
-      const paidParticipants = (data.participants || []).filter(
-        p => p.paymentStatus === 'paid'
-      );
-      const unpaidParticipants = (data.participants || []).filter(
-        p => p.paymentStatus !== 'paid'
-      );
-
-      // Delete unpaid individual orders
+      // Suspend unpaid users
       const batch = writeBatch(db);
       for (const participant of unpaidParticipants) {
-        if (participant.orderId) {
-          const orderRef = doc(db, 'orders', participant.orderId);
-          batch.update(orderRef, {
-            orderStatus: 'cancelled',
-            cancelReason: 'payment_window_expired',
-            updatedAt: serverTimestamp()
-          });
-        }
+        await groupService.suspendUser(participant.userId, 'Failed to complete payment within time limit');
       }
-      await batch.commit();
 
       if (paidParticipants.length === 0) {
-        // No paid orders - cancel entire group order
-        await updateDoc(groupOrderRef, {
+        // No one paid - cancel order
+        await updateDoc(cycleRef, {
+          phase: 'cancelled',
           status: 'cancelled',
-          cancelReason: 'no_payments',
+          cancelReason: 'No payments received',
           cancelledAt: serverTimestamp(),
           updatedAt: serverTimestamp()
         });
-      } else {
-        // Some paid - proceed with paid orders only
-        await updateDoc(groupOrderRef, {
-          participants: paidParticipants,
-          status: 'confirmed',
-          confirmedAt: serverTimestamp(),
-          paymentWindow: {
-            ...data.paymentWindow,
-            isActive: false,
-            closedAt: Date.now()
-          },
-          updatedAt: serverTimestamp()
-        });
+
+        toast.error('Order cycle cancelled - no payments received');
+        return;
       }
 
-      console.log(`✅ Cleaned up: ${paidParticipants.length} paid, ${unpaidParticipants.length} cancelled`);
+      // Proceed with paid participants only
+      // Recalculate product orders
+      const finalProductOrders = {};
+      paidParticipants.forEach(participant => {
+        participant.items.forEach(item => {
+          if (!finalProductOrders[item.id]) {
+            finalProductOrders[item.id] = {
+              productId: item.id,
+              name: item.name,
+              price: item.groupPrice,
+              quantity: 0,
+              participants: []
+            };
+          }
+          finalProductOrders[item.id].quantity += item.quantity;
+          finalProductOrders[item.id].participants.push({
+            userId: participant.userId,
+            userName: participant.userName,
+            quantity: item.quantity
+          });
+        });
+      });
+
+      await updateDoc(cycleRef, {
+        phase: 'confirmed',
+        status: 'confirmed',
+        participants: paidParticipants,
+        productOrders: finalProductOrders,
+        totalParticipants: paidParticipants.length,
+        totalAmount: paidParticipants.reduce((sum, p) => sum + p.totalAmount, 0),
+        confirmedAt: serverTimestamp(),
+        estimatedDelivery: Timestamp.fromMillis(Date.now() + 24 * 60 * 60 * 1000), // Tomorrow
+        updatedAt: serverTimestamp()
+      });
+
+      toast.success(`Order confirmed! Delivering tomorrow to ${paidParticipants.length} members`, {
+        duration: 5000,
+        icon: '🚚'
+      });
+
+      console.log(`✅ Order cycle ${cycleId} confirmed with ${paidParticipants.length} participants`);
     } catch (error) {
-      console.error('Error cleaning up payment window:', error);
+      console.error('Error ending payment window:', error);
     }
   },
 
   /**
    * Update payment status
    */
-  async updatePaymentStatus(orderId, status) {
+  async updatePaymentStatus(cycleId, userId, status) {
     try {
       return await runTransaction(db, async (transaction) => {
-        const orderRef = doc(db, 'orders', orderId);
-        const orderDoc = await transaction.get(orderRef);
+        const cycleRef = doc(db, 'orderCycles', cycleId);
+        const cycleDoc = await transaction.get(cycleRef);
         
-        if (!orderDoc.exists()) throw new Error('Order not found');
+        if (!cycleDoc.exists()) throw new Error('Cycle not found');
         
-        const orderData = orderDoc.data();
-        
-        transaction.update(orderRef, {
-          paymentStatus: status,
-          paidAt: status === 'paid' ? serverTimestamp() : null,
+        const cycle = cycleDoc.data();
+        const participants = cycle.participants.map(p => 
+          p.userId === userId 
+            ? { ...p, paymentStatus: status, paidAt: status === 'paid' ? Timestamp.now() : null }
+            : p
+        );
+
+        const allPaid = participants.every(p => p.paymentStatus === 'paid');
+
+        transaction.update(cycleRef, {
+          participants,
+          ...(allPaid && {
+            phase: 'confirmed',
+            status: 'confirmed',
+            confirmedAt: serverTimestamp(),
+            estimatedDelivery: Timestamp.fromMillis(Date.now() + 24 * 60 * 60 * 1000)
+          }),
           updatedAt: serverTimestamp()
         });
-
-        if (orderData.groupOrderId) {
-          await this.updateParticipantPaymentInGroupOrder(
-            orderData.groupOrderId,
-            orderData.userId,
-            orderId,
-            status
-          );
-        }
 
         return true;
       });
@@ -518,151 +689,91 @@ export const orderService = {
   },
 
   /**
-   * Update participant payment in group order
+   * Schedule collecting phase end
    */
-  async updateParticipantPaymentInGroupOrder(groupOrderId, userId, orderId, status) {
-    try {
-      const groupOrderRef = doc(db, 'groupOrders', groupOrderId);
-      const groupOrderDoc = await getDoc(groupOrderRef);
-      
-      if (!groupOrderDoc.exists()) return false;
-
-      const data = groupOrderDoc.data();
-      let participants = data.participants || [];
-      
-      participants = participants.map(p => {
-        if (p.userId === userId || p.orderId === orderId) {
-          return {
-            ...p,
-            paymentStatus: status,
-            paidAt: status === 'paid' ? Date.now() : null
-          };
-        }
-        return p;
-      });
-
-      const paidCount = participants.filter(p => p.paymentStatus === 'paid').length;
-      const allPaid = paidCount === participants.length && participants.length > 0;
-
-      let newStatus = data.status;
-      if (allPaid && data.minQuantityMet) {
-        newStatus = 'processing'; // Ready for delivery
-      } else if (paidCount > 0) {
-        newStatus = 'active';
-      }
-
-      await updateDoc(groupOrderRef, {
-        participants,
-        status: newStatus,
-        allPaid,
-        paymentProgress: participants.length > 0 ? Math.round((paidCount / participants.length) * 100) : 0,
-        ...(allPaid && { confirmedAt: serverTimestamp() }),
-        updatedAt: serverTimestamp()
-      });
-
-      // If all paid, start delivery process
-      if (allPaid) {
-        await this.startDeliveryProcess(groupOrderId);
-      }
-
-      return true;
-    } catch (error) {
-      console.error('Error updating participant payment:', error);
-      return false;
+  scheduleCollectingPhaseEnd(cycleId, endsAt) {
+    const delay = endsAt - Date.now();
+    if (delay > 0) {
+      setTimeout(async () => {
+        await this.endCollectingPhase(cycleId);
+      }, delay);
     }
   },
 
   /**
-   * Start delivery process
+   * Schedule payment window end
    */
-  async startDeliveryProcess(groupOrderId) {
-    try {
-      console.log('🚚 Starting delivery process for:', groupOrderId);
-      
-      await updateDoc(doc(db, 'groupOrders', groupOrderId), {
-        status: 'processing',
-        deliveryStatus: 'preparing',
-        processingStartedAt: serverTimestamp(),
-        estimatedDelivery: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000), // 2 days
-        updatedAt: serverTimestamp()
-      });
-    } catch (error) {
-      console.error('Error starting delivery:', error);
+  schedulePaymentWindowEnd(cycleId, endsAt) {
+    const delay = endsAt - Date.now();
+    if (delay > 0) {
+      setTimeout(async () => {
+        await this.endPaymentWindow(cycleId);
+      }, delay);
     }
   },
 
   /**
-   * Update delivery status
+   * Get active order cycles for a group
    */
-  async updateDeliveryStatus(groupOrderId, deliveryStatus) {
+  async getActiveOrderCycles(groupId) {
     try {
-      await updateDoc(doc(db, 'groupOrders', groupOrderId), {
-        deliveryStatus,
-        ...(deliveryStatus === 'delivered' && {
-          deliveredAt: serverTimestamp(),
-          status: 'completed'
-        }),
-        updatedAt: serverTimestamp()
-      });
-
-      return true;
-    } catch (error) {
-      console.error('Error updating delivery status:', error);
-      throw error;
-    }
-  },
-
-  async getActiveGroupOrders(groupId) {
-    try {
-      const q = query(
-        collection(db, 'groupOrders'),
+      const cyclesQuery = query(
+        collection(db, 'orderCycles'),
         where('groupId', '==', groupId),
-        where('status', 'in', ['collecting', 'active', 'payment_window', 'confirmed', 'processing'])
+        where('phase', 'in', ['collecting', 'payment_window', 'confirmed', 'processing']),
+        orderBy('createdAt', 'desc')
       );
       
-      const snapshot = await getDocs(q);
-      return snapshot.docs
-        .map(doc => ({ id: doc.id, ...doc.data() }))
-        .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+      const snapshot = await getDocs(cyclesQuery);
+      return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
     } catch (error) {
-      console.error('Error fetching active orders:', error);
+      console.error('Error fetching cycles:', error);
       throw error;
     }
   },
 
-  async getGroupOrderDetails(groupOrderId) {
+  /**
+   * Get order cycle details
+   */
+  async getOrderCycleDetails(cycleId) {
     try {
-      const groupOrderRef = doc(db, 'groupOrders', groupOrderId);
-      const docSnapshot = await getDoc(groupOrderRef);
-      return docSnapshot.exists() ? { id: docSnapshot.id, ...docSnapshot.data() } : null;
+      const cycleRef = doc(db, 'orderCycles', cycleId);
+      const cycleDoc = await getDoc(cycleRef);
+      return cycleDoc.exists() ? { id: cycleDoc.id, ...cycleDoc.data() } : null;
     } catch (error) {
-      console.error('Error fetching order details:', error);
+      console.error('Error fetching cycle details:', error);
       throw error;
     }
   },
 
-  async getUserOrders(userId) {
-    try {
-      const q = query(
-        collection(db, 'orders'),
-        where('userId', '==', userId)
-      );
-      
-      const snapshot = await getDocs(q);
-      return snapshot.docs
-        .map(doc => ({ id: doc.id, ...doc.data() }))
-        .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
-    } catch (error) {
-      console.error('Error fetching user orders:', error);
-      throw error;
-    }
-  },
-
-  subscribeToGroupOrder(groupOrderId, callback) {
-    const groupOrderRef = doc(db, 'groupOrders', groupOrderId);
-    return onSnapshot(groupOrderRef, (doc) => {
+  /**
+   * Subscribe to order cycle updates
+   */
+  subscribeToOrderCycle(cycleId, callback) {
+    const cycleRef = doc(db, 'orderCycles', cycleId);
+    return onSnapshot(cycleRef, (doc) => {
       if (doc.exists()) callback({ id: doc.id, ...doc.data() });
     });
+  },
+
+  /**
+   * Get user's order history
+   */
+  async getUserOrderHistory(userId) {
+    try {
+      const cyclesQuery = query(
+        collection(db, 'orderCycles'),
+        where('participants', 'array-contains', { userId })
+      );
+      
+      const snapshot = await getDocs(cyclesQuery);
+      return snapshot.docs
+        .map(doc => ({ id: doc.id, ...doc.data() }))
+        .filter(cycle => cycle.participants?.some(p => p.userId === userId));
+    } catch (error) {
+      console.error('Error fetching user orders:', error);
+      return [];
+    }
   }
 };
 

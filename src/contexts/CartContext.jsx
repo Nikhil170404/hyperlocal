@@ -1,4 +1,4 @@
-// src/contexts/CartContext.jsx - WITH FIRESTORE PERSISTENCE
+// src/contexts/CartContext.jsx - FIXED PERSISTENCE ISSUE
 import React, { createContext, useContext, useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { 
   doc, 
@@ -42,11 +42,13 @@ export function CartProvider({ children }) {
   const [cartItems, setCartItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
+  const [initialized, setInitialized] = useState(false);
   const { currentUser } = useAuth();
   
   const saveTimeoutRef = useRef(null);
   const isMountedRef = useRef(true);
   const unsubscribeRef = useRef(null);
+  const localStorageKey = 'groupbuy_cart';
 
   useEffect(() => {
     return () => {
@@ -60,49 +62,98 @@ export function CartProvider({ children }) {
     };
   }, []);
 
-  // Real-time cart sync with Firestore
+  // Load cart from localStorage immediately (before Firestore)
   useEffect(() => {
     if (!currentUser) {
-      setCartItems([]);
+      const localCart = localStorage.getItem(localStorageKey);
+      if (localCart) {
+        try {
+          const parsed = JSON.parse(localCart);
+          setCartItems(parsed);
+          console.log('📦 Cart loaded from localStorage:', parsed.length, 'items');
+        } catch (error) {
+          console.error('Error parsing localStorage cart:', error);
+        }
+      }
       setLoading(false);
+      setInitialized(true);
       return;
     }
 
-    const cartRef = doc(db, 'carts', currentUser.uid);
-    
-    // Subscribe to real-time updates
-    unsubscribeRef.current = onSnapshot(
-      cartRef,
-      (snapshot) => {
-        if (isMountedRef.current) {
-          if (snapshot.exists()) {
-            const data = snapshot.data();
-            setCartItems(data.items || []);
-            console.log('📥 Cart loaded from Firestore:', data.items?.length || 0, 'items');
-          } else {
-            setCartItems([]);
-          }
-          setLoading(false);
-        }
-      },
-      (error) => {
-        console.error('❌ Cart subscription error:', error);
-        if (isMountedRef.current) {
-          setCartItems([]);
-          setLoading(false);
-        }
+    // For logged-in users, load from localStorage first (instant), then sync with Firestore
+    const localCart = localStorage.getItem(`${localStorageKey}_${currentUser.uid}`);
+    if (localCart) {
+      try {
+        const parsed = JSON.parse(localCart);
+        setCartItems(parsed);
+        console.log('📦 Cart loaded from localStorage (user):', parsed.length, 'items');
+      } catch (error) {
+        console.error('Error parsing localStorage cart:', error);
       }
-    );
+    }
 
-    return () => {
-      if (unsubscribeRef.current) {
-        unsubscribeRef.current();
-      }
-    };
+    // Then load from Firestore
+    loadFromFirestore();
   }, [currentUser]);
 
-  // Save cart to Firestore (immediate, no debounce for better UX)
-  const saveCart = useCallback(async (items) => {
+  const loadFromFirestore = async () => {
+    if (!currentUser) return;
+
+    try {
+      const cartRef = doc(db, 'carts', currentUser.uid);
+      
+      // Subscribe to real-time updates
+      unsubscribeRef.current = onSnapshot(
+        cartRef,
+        (snapshot) => {
+          if (isMountedRef.current) {
+            if (snapshot.exists()) {
+              const data = snapshot.data();
+              const items = data.items || [];
+              
+              // Only update if different from current state
+              if (JSON.stringify(items) !== JSON.stringify(cartItems)) {
+                setCartItems(items);
+                // Also update localStorage
+                saveToLocalStorage(items);
+                console.log('📥 Cart synced from Firestore:', items.length, 'items');
+              }
+            }
+            setLoading(false);
+            setInitialized(true);
+          }
+        },
+        (error) => {
+          console.error('❌ Cart subscription error:', error);
+          if (isMountedRef.current) {
+            setLoading(false);
+            setInitialized(true);
+          }
+        }
+      );
+    } catch (error) {
+      console.error('Error loading from Firestore:', error);
+      setLoading(false);
+      setInitialized(true);
+    }
+  };
+
+  // Save to localStorage immediately (synchronous)
+  const saveToLocalStorage = useCallback((items) => {
+    try {
+      if (currentUser) {
+        localStorage.setItem(`${localStorageKey}_${currentUser.uid}`, JSON.stringify(items));
+      } else {
+        localStorage.setItem(localStorageKey, JSON.stringify(items));
+      }
+      console.log('💾 Cart saved to localStorage');
+    } catch (error) {
+      console.error('Error saving to localStorage:', error);
+    }
+  }, [currentUser]);
+
+  // Save to Firestore (async, with debounce)
+  const saveToFirestore = useCallback(async (items) => {
     if (!currentUser) return;
 
     try {
@@ -119,8 +170,8 @@ export function CartProvider({ children }) {
       
       console.log('✅ Cart saved to Firestore');
     } catch (error) {
-      console.error('❌ Failed to save cart:', error);
-      toast.error('Failed to save cart');
+      console.error('❌ Failed to save cart to Firestore:', error);
+      toast.error('Failed to sync cart. Changes saved locally.');
     } finally {
       if (isMountedRef.current) {
         setSyncing(false);
@@ -128,12 +179,23 @@ export function CartProvider({ children }) {
     }
   }, [currentUser]);
 
-  const addToCart = useCallback(async (product, quantity = 1) => {
-    if (!currentUser) {
-      toast.error('Please login to add items to cart');
-      return;
+  // Combined save function
+  const saveCart = useCallback((items) => {
+    // Save to localStorage immediately (no lag)
+    saveToLocalStorage(items);
+    
+    // Save to Firestore with debounce (optional for logged-in users)
+    if (currentUser) {
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+      }
+      saveTimeoutRef.current = setTimeout(() => {
+        saveToFirestore(items);
+      }, 1000); // Debounce 1 second
     }
+  }, [currentUser, saveToLocalStorage, saveToFirestore]);
 
+  const addToCart = useCallback(async (product, quantity = 1) => {
     const existingItem = cartItems.find(item => item.id === product.id);
     
     let newItems;
@@ -150,13 +212,13 @@ export function CartProvider({ children }) {
     }
     
     setCartItems(newItems);
-    await saveCart(newItems);
-  }, [currentUser, cartItems, saveCart]);
+    saveCart(newItems);
+  }, [cartItems, saveCart]);
 
   const removeFromCart = useCallback(async (productId) => {
     const newItems = cartItems.filter(item => item.id !== productId);
     setCartItems(newItems);
-    await saveCart(newItems);
+    saveCart(newItems);
     toast.success('Item removed', { duration: 2000 });
   }, [cartItems, saveCart]);
 
@@ -170,7 +232,7 @@ export function CartProvider({ children }) {
       item.id === productId ? { ...item, quantity } : item
     );
     setCartItems(newItems);
-    await saveCart(newItems);
+    saveCart(newItems);
   }, [cartItems, saveCart, removeFromCart]);
 
   const incrementQuantity = useCallback(async (productId) => {
@@ -178,7 +240,7 @@ export function CartProvider({ children }) {
       item.id === productId ? { ...item, quantity: item.quantity + 1 } : item
     );
     setCartItems(newItems);
-    await saveCart(newItems);
+    saveCart(newItems);
   }, [cartItems, saveCart]);
 
   const decrementQuantity = useCallback(async (productId) => {
@@ -194,16 +256,27 @@ export function CartProvider({ children }) {
       i.id === productId ? { ...i, quantity: i.quantity - 1 } : i
     );
     setCartItems(newItems);
-    await saveCart(newItems);
+    saveCart(newItems);
   }, [cartItems, saveCart, removeFromCart]);
 
   const clearCart = useCallback(async () => {
-    if (!currentUser) return;
-
     try {
-      const cartRef = doc(db, 'carts', currentUser.uid);
-      await deleteDoc(cartRef);
+      // Clear from state
       setCartItems([]);
+      
+      // Clear from localStorage
+      if (currentUser) {
+        localStorage.removeItem(`${localStorageKey}_${currentUser.uid}`);
+      } else {
+        localStorage.removeItem(localStorageKey);
+      }
+
+      // Clear from Firestore
+      if (currentUser) {
+        const cartRef = doc(db, 'carts', currentUser.uid);
+        await deleteDoc(cartRef);
+      }
+      
       toast.success('Cart cleared', { duration: 2000 });
     } catch (error) {
       console.error('Error clearing cart:', error);
@@ -245,11 +318,12 @@ export function CartProvider({ children }) {
     cartItems,
     loading,
     syncing,
+    initialized,
     cartTotal: calculations.total,
     cartCount: calculations.count,
     retailTotal: calculations.retailTotal,
     totalSavings: calculations.savings
-  }), [cartItems, loading, syncing, calculations]);
+  }), [cartItems, loading, syncing, initialized, calculations]);
 
   const actionsValue = useMemo(() => ({
     addToCart,
@@ -275,6 +349,18 @@ export function CartProvider({ children }) {
     getItemQuantity,
     calculations
   ]);
+
+  // Don't render children until cart is initialized
+  if (!initialized) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-center">
+          <div className="h-12 w-12 animate-spin rounded-full border-4 border-gray-300 border-t-green-600 mx-auto mb-4"></div>
+          <p className="text-gray-600">Loading cart...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <CartStateContext.Provider value={stateValue}>
