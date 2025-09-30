@@ -1,14 +1,4 @@
-// src/contexts/CartContext.jsx - PERFORMANCE-OPTIMIZED 2025
-/**
- * Cart Context with Performance Optimization
- * Best Practices 2025:
- * - Memoization with useMemo/useCallback
- * - Split contexts to prevent unnecessary re-renders
- * - Optimistic UI updates
- * - Debounced Firestore writes
- * - Error boundaries
- */
-
+// src/contexts/CartContext.jsx - WITH FIRESTORE PERSISTENCE
 import React, { createContext, useContext, useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { 
   doc, 
@@ -22,13 +12,9 @@ import { db } from '../config/firebase';
 import { useAuth } from './AuthContext';
 import toast from 'react-hot-toast';
 
-// ✅ Create separate contexts for better performance
 const CartStateContext = createContext();
 const CartActionsContext = createContext();
 
-/**
- * Custom hook to use cart state (read-only)
- */
 export function useCartState() {
   const context = useContext(CartStateContext);
   if (!context) {
@@ -37,9 +23,6 @@ export function useCartState() {
   return context;
 }
 
-/**
- * Custom hook to use cart actions (functions only)
- */
 export function useCartActions() {
   const context = useContext(CartActionsContext);
   if (!context) {
@@ -48,9 +31,6 @@ export function useCartActions() {
   return context;
 }
 
-/**
- * Combined hook for backward compatibility
- */
 export function useCart() {
   return {
     ...useCartState(),
@@ -58,30 +38,29 @@ export function useCart() {
   };
 }
 
-/**
- * Cart Provider Component with Performance Optimization
- */
 export function CartProvider({ children }) {
   const [cartItems, setCartItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const { currentUser } = useAuth();
   
-  // ✅ Use refs to prevent unnecessary re-renders
   const saveTimeoutRef = useRef(null);
   const isMountedRef = useRef(true);
+  const unsubscribeRef = useRef(null);
 
-  // ✅ Cleanup on unmount
   useEffect(() => {
     return () => {
       isMountedRef.current = false;
       if (saveTimeoutRef.current) {
         clearTimeout(saveTimeoutRef.current);
       }
+      if (unsubscribeRef.current) {
+        unsubscribeRef.current();
+      }
     };
   }, []);
 
-  // ✅ Subscribe to cart changes with real-time updates
+  // Real-time cart sync with Firestore
   useEffect(() => {
     if (!currentUser) {
       setCartItems([]);
@@ -91,13 +70,15 @@ export function CartProvider({ children }) {
 
     const cartRef = doc(db, 'carts', currentUser.uid);
     
-    const unsubscribe = onSnapshot(
+    // Subscribe to real-time updates
+    unsubscribeRef.current = onSnapshot(
       cartRef,
       (snapshot) => {
         if (isMountedRef.current) {
           if (snapshot.exists()) {
             const data = snapshot.data();
             setCartItems(data.items || []);
+            console.log('📥 Cart loaded from Firestore:', data.items?.length || 0, 'items');
           } else {
             setCartItems([]);
           }
@@ -105,144 +86,117 @@ export function CartProvider({ children }) {
         }
       },
       (error) => {
-        console.error('Cart subscription error:', error);
+        console.error('❌ Cart subscription error:', error);
         if (isMountedRef.current) {
           setCartItems([]);
           setLoading(false);
-          toast.error('Failed to load cart');
         }
       }
     );
 
-    return () => unsubscribe();
+    return () => {
+      if (unsubscribeRef.current) {
+        unsubscribeRef.current();
+      }
+    };
   }, [currentUser]);
 
-  // ✅ Debounced save function to reduce Firestore writes
-  const debouncedSaveCart = useCallback((items) => {
+  // Save cart to Firestore (immediate, no debounce for better UX)
+  const saveCart = useCallback(async (items) => {
     if (!currentUser) return;
 
-    // Clear existing timeout
-    if (saveTimeoutRef.current) {
-      clearTimeout(saveTimeoutRef.current);
-    }
-
-    // Set new timeout (300ms debounce)
-    saveTimeoutRef.current = setTimeout(async () => {
-      try {
-        setSyncing(true);
-        const cartRef = doc(db, 'carts', currentUser.uid);
-        
-        await setDoc(cartRef, {
-          userId: currentUser.uid,
-          items: items,
-          itemCount: items.reduce((sum, item) => sum + item.quantity, 0),
-          totalAmount: items.reduce((sum, item) => sum + (item.groupPrice * item.quantity), 0),
-          updatedAt: serverTimestamp()
-        });
-        
-        console.log('✅ Cart saved to Firestore');
-      } catch (error) {
-        console.error('❌ Failed to save cart:', error);
-        toast.error('Failed to save cart. Changes may be lost.');
-      } finally {
-        if (isMountedRef.current) {
-          setSyncing(false);
-        }
+    try {
+      setSyncing(true);
+      const cartRef = doc(db, 'carts', currentUser.uid);
+      
+      await setDoc(cartRef, {
+        userId: currentUser.uid,
+        items: items,
+        itemCount: items.reduce((sum, item) => sum + item.quantity, 0),
+        totalAmount: items.reduce((sum, item) => sum + (item.groupPrice * item.quantity), 0),
+        updatedAt: serverTimestamp()
+      });
+      
+      console.log('✅ Cart saved to Firestore');
+    } catch (error) {
+      console.error('❌ Failed to save cart:', error);
+      toast.error('Failed to save cart');
+    } finally {
+      if (isMountedRef.current) {
+        setSyncing(false);
       }
-    }, 300);
+    }
   }, [currentUser]);
 
-  // ✅ Memoized action: Add to cart with optimistic UI
   const addToCart = useCallback(async (product, quantity = 1) => {
     if (!currentUser) {
       toast.error('Please login to add items to cart');
       return;
     }
 
-    // Optimistic update
-    setCartItems(prevItems => {
-      const existingItem = prevItems.find(item => item.id === product.id);
-      
-      let newItems;
-      if (existingItem) {
-        newItems = prevItems.map(item =>
-          item.id === product.id
-            ? { ...item, quantity: item.quantity + quantity }
-            : item
-        );
-        toast.success('Cart updated!', { icon: '🛒', duration: 2000 });
-      } else {
-        newItems = [...prevItems, { ...product, quantity }];
-        toast.success('Added to cart!', { icon: '✅', duration: 2000 });
-      }
-      
-      // Debounced save
-      debouncedSaveCart(newItems);
-      
-      return newItems;
-    });
-  }, [currentUser, debouncedSaveCart]);
+    const existingItem = cartItems.find(item => item.id === product.id);
+    
+    let newItems;
+    if (existingItem) {
+      newItems = cartItems.map(item =>
+        item.id === product.id
+          ? { ...item, quantity: item.quantity + quantity }
+          : item
+      );
+      toast.success('Cart updated!', { icon: '🛒', duration: 2000 });
+    } else {
+      newItems = [...cartItems, { ...product, quantity }];
+      toast.success('Added to cart!', { icon: '✅', duration: 2000 });
+    }
+    
+    setCartItems(newItems);
+    await saveCart(newItems);
+  }, [currentUser, cartItems, saveCart]);
 
-  // ✅ Memoized action: Remove from cart
   const removeFromCart = useCallback(async (productId) => {
-    setCartItems(prevItems => {
-      const newItems = prevItems.filter(item => item.id !== productId);
-      debouncedSaveCart(newItems);
-      toast.success('Item removed from cart', { duration: 2000 });
-      return newItems;
-    });
-  }, [debouncedSaveCart]);
+    const newItems = cartItems.filter(item => item.id !== productId);
+    setCartItems(newItems);
+    await saveCart(newItems);
+    toast.success('Item removed', { duration: 2000 });
+  }, [cartItems, saveCart]);
 
-  // ✅ Memoized action: Update quantity
   const updateQuantity = useCallback(async (productId, quantity) => {
     if (quantity <= 0) {
       await removeFromCart(productId);
       return;
     }
 
-    setCartItems(prevItems => {
-      const newItems = prevItems.map(item =>
-        item.id === productId ? { ...item, quantity } : item
-      );
-      debouncedSaveCart(newItems);
-      return newItems;
-    });
-  }, [removeFromCart, debouncedSaveCart]);
+    const newItems = cartItems.map(item =>
+      item.id === productId ? { ...item, quantity } : item
+    );
+    setCartItems(newItems);
+    await saveCart(newItems);
+  }, [cartItems, saveCart, removeFromCart]);
 
-  // ✅ Memoized action: Increment quantity
   const incrementQuantity = useCallback(async (productId) => {
-    setCartItems(prevItems => {
-      const newItems = prevItems.map(item =>
-        item.id === productId ? { ...item, quantity: item.quantity + 1 } : item
-      );
-      debouncedSaveCart(newItems);
-      return newItems;
-    });
-  }, [debouncedSaveCart]);
+    const newItems = cartItems.map(item =>
+      item.id === productId ? { ...item, quantity: item.quantity + 1 } : item
+    );
+    setCartItems(newItems);
+    await saveCart(newItems);
+  }, [cartItems, saveCart]);
 
-  // ✅ Memoized action: Decrement quantity
   const decrementQuantity = useCallback(async (productId) => {
-    setCartItems(prevItems => {
-      const item = prevItems.find(i => i.id === productId);
-      if (!item) return prevItems;
-      
-      if (item.quantity <= 1) {
-        // Remove if quantity would be 0
-        const newItems = prevItems.filter(i => i.id !== productId);
-        debouncedSaveCart(newItems);
-        toast.success('Item removed from cart', { duration: 2000 });
-        return newItems;
-      }
-      
-      const newItems = prevItems.map(i =>
-        i.id === productId ? { ...i, quantity: i.quantity - 1 } : i
-      );
-      debouncedSaveCart(newItems);
-      return newItems;
-    });
-  }, [debouncedSaveCart]);
+    const item = cartItems.find(i => i.id === productId);
+    if (!item) return;
+    
+    if (item.quantity <= 1) {
+      await removeFromCart(productId);
+      return;
+    }
+    
+    const newItems = cartItems.map(i =>
+      i.id === productId ? { ...i, quantity: i.quantity - 1 } : i
+    );
+    setCartItems(newItems);
+    await saveCart(newItems);
+  }, [cartItems, saveCart, removeFromCart]);
 
-  // ✅ Memoized action: Clear cart
   const clearCart = useCallback(async () => {
     if (!currentUser) return;
 
@@ -257,7 +211,6 @@ export function CartProvider({ children }) {
     }
   }, [currentUser]);
 
-  // ✅ Memoized calculations
   const calculations = useMemo(() => {
     const total = cartItems.reduce(
       (sum, item) => sum + (item.groupPrice * item.quantity), 
@@ -279,19 +232,15 @@ export function CartProvider({ children }) {
     return { total, count, retailTotal, savings };
   }, [cartItems]);
 
-  // ✅ Memoized helper: Check if item is in cart
   const isInCart = useCallback((productId) => {
     return cartItems.some(item => item.id === productId);
   }, [cartItems]);
 
-  // ✅ Memoized helper: Get item quantity
   const getItemQuantity = useCallback((productId) => {
     const item = cartItems.find(i => i.id === productId);
     return item ? item.quantity : 0;
   }, [cartItems]);
 
-  // ✅ Split context values for optimal performance
-  // State context - only re-renders when cart items change
   const stateValue = useMemo(() => ({
     cartItems,
     loading,
@@ -302,7 +251,6 @@ export function CartProvider({ children }) {
     totalSavings: calculations.savings
   }), [cartItems, loading, syncing, calculations]);
 
-  // Actions context - functions never change due to useCallback
   const actionsValue = useMemo(() => ({
     addToCart,
     removeFromCart,
@@ -312,7 +260,6 @@ export function CartProvider({ children }) {
     clearCart,
     isInCart,
     getItemQuantity,
-    // Legacy function names for backward compatibility
     getCartTotal: () => calculations.total,
     getCartCount: () => calculations.count,
     getRetailTotal: () => calculations.retailTotal,
@@ -336,14 +283,6 @@ export function CartProvider({ children }) {
       </CartActionsContext.Provider>
     </CartStateContext.Provider>
   );
-}
-
-// ✅ Higher-Order Component for cart consumers (optional)
-export function withCart(Component) {
-  return function CartComponent(props) {
-    const cart = useCart();
-    return <Component {...props} cart={cart} />;
-  };
 }
 
 export default CartProvider;

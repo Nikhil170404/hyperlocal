@@ -1,5 +1,5 @@
-// src/pages/Groups.jsx - COMPLETELY FIXED
-import React, { useState, useEffect } from 'react';
+// src/pages/Groups.jsx - FIXED LOADING AND DISPLAY ISSUES
+import React, { useState, useEffect, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { groupService } from '../services/groupService';
@@ -18,60 +18,122 @@ import toast from 'react-hot-toast';
 
 export default function Groups() {
   const [groups, setGroups] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [userLocation, setUserLocation] = useState(null);
   const [locationLoading, setLocationLoading] = useState(true);
   const { currentUser, userProfile } = useAuth();
   const navigate = useNavigate();
+  
+  // Refs to prevent duplicate operations
+  const locationFetchedRef = useRef(false);
+  const toastShownRef = useRef(false);
+  const groupsFetchedRef = useRef(false);
 
+  // Get user location on mount
   useEffect(() => {
-    getUserLocation();
+    if (!locationFetchedRef.current) {
+      locationFetchedRef.current = true;
+      getUserLocation();
+    }
   }, []);
 
+  // Fetch groups when location is available
   useEffect(() => {
-    if (userLocation) {
+    if (userLocation && !groupsFetchedRef.current) {
+      groupsFetchedRef.current = true;
       fetchGroups();
     }
   }, [userLocation]);
 
   const getUserLocation = () => {
     setLocationLoading(true);
+    
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
         (position) => {
-          setUserLocation({
+          const location = {
             latitude: position.coords.latitude,
             longitude: position.coords.longitude
-          });
+          };
+          setUserLocation(location);
           setLocationLoading(false);
-          toast.success('Location detected!', { icon: '📍' });
+          
+          // Show success toast only once
+          if (!toastShownRef.current) {
+            toastShownRef.current = true;
+            toast.success('Location detected!', { 
+              icon: '📍',
+              duration: 2000,
+              id: 'location-detected'
+            });
+          }
         },
         (error) => {
           console.error('Location error:', error);
-          setUserLocation({ latitude: 19.0760, longitude: 72.8777 });
+          const defaultLocation = { latitude: 19.0760, longitude: 72.8777 }; // Mumbai
+          setUserLocation(defaultLocation);
           setLocationLoading(false);
-          toast('Using default location: Mumbai', { icon: '📍' });
+          
+          if (!toastShownRef.current) {
+            toastShownRef.current = true;
+            toast('Using default location: Mumbai', { 
+              icon: '📍',
+              duration: 2000,
+              id: 'location-default'
+            });
+          }
+        },
+        {
+          timeout: 10000,
+          maximumAge: 60000,
+          enableHighAccuracy: false
         }
       );
     } else {
-      setUserLocation({ latitude: 19.0760, longitude: 72.8777 });
+      const defaultLocation = { latitude: 19.0760, longitude: 72.8777 };
+      setUserLocation(defaultLocation);
       setLocationLoading(false);
+      
+      if (!toastShownRef.current) {
+        toastShownRef.current = true;
+        toast('Geolocation not supported', { 
+          icon: '📍',
+          duration: 2000,
+          id: 'location-unsupported'
+        });
+      }
     }
   };
 
   const fetchGroups = async () => {
+    if (!userLocation) {
+      console.log('No location available');
+      return;
+    }
+
     try {
       setLoading(true);
+      console.log('Fetching groups for location:', userLocation);
+      
       const groupsData = await groupService.getGroupsByLocation(
         userLocation.latitude,
-        userLocation.longitude
+        userLocation.longitude,
+        50 // 50km radius
       );
-      console.log('✅ Fetched groups:', groupsData);
-      setGroups(groupsData);
+      
+      console.log('Groups fetched:', groupsData.length);
+      
+      // Remove duplicates
+      const uniqueGroups = Array.from(
+        new Map(groupsData.map(group => [group.id, group])).values()
+      );
+      
+      setGroups(uniqueGroups);
     } catch (error) {
-      console.error('❌ Error fetching groups:', error);
+      console.error('Error fetching groups:', error);
       toast.error('Failed to load groups');
+      setGroups([]); // Set empty array on error
     } finally {
       setLoading(false);
     }
@@ -81,22 +143,37 @@ export default function Groups() {
     try {
       await groupService.joinGroup(groupId, currentUser.uid);
       toast.success('Successfully joined group!', { icon: '🎉' });
-      await fetchGroups(); // Refresh
+      
+      // Refresh groups
+      groupsFetchedRef.current = false;
+      await fetchGroups();
     } catch (error) {
-      console.error('❌ Error joining group:', error);
+      console.error('Error joining group:', error);
       toast.error(error.message || 'Failed to join group');
     }
   };
 
   const handleViewDetails = (groupId) => {
-    console.log('📍 Navigating to group:', groupId);
     navigate(`/groups/${groupId}`);
   };
 
+  const handleCreateSuccess = async () => {
+    setShowCreateForm(false);
+    
+    // Reset and refresh groups
+    groupsFetchedRef.current = false;
+    await fetchGroups();
+    
+    toast.success('Group created! Refreshing list...', { duration: 2000 });
+  };
+
+  // Show location loading screen
   if (locationLoading) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-gray-50 to-green-50 px-4 py-8">
-        <LoadingSpinner size="large" text="Getting your location..." fullScreen />
+        <div className="max-w-7xl mx-auto">
+          <LoadingSpinner size="large" text="Getting your location..." fullScreen />
+        </div>
       </div>
     );
   }
@@ -110,7 +187,7 @@ export default function Groups() {
             <h1 className="text-4xl font-bold text-gray-800 mb-2">Local Groups</h1>
             <p className="text-gray-600 flex items-center gap-2">
               <MapPinIcon className="h-5 w-5 text-green-600" />
-              Find and join buying groups in your area
+              {groups.length} {groups.length === 1 ? 'group' : 'groups'} in your area
             </p>
           </div>
           <button
@@ -123,26 +200,28 @@ export default function Groups() {
         </div>
 
         {/* Stats Cards */}
-        <div className="grid md:grid-cols-3 gap-6 mb-8">
-          <StatsCard
-            icon={UserGroupIcon}
-            label="Total Groups"
-            value={groups.length}
-            color="green"
-          />
-          <StatsCard
-            icon={UsersIcon}
-            label="Total Members"
-            value={groups.reduce((sum, g) => sum + (g.members?.length || 0), 0)}
-            color="blue"
-          />
-          <StatsCard
-            icon={SparklesIcon}
-            label="Active Orders"
-            value={groups.reduce((sum, g) => sum + (g.currentOrders?.length || 0), 0)}
-            color="purple"
-          />
-        </div>
+        {groups.length > 0 && (
+          <div className="grid md:grid-cols-3 gap-6 mb-8">
+            <StatsCard
+              icon={UserGroupIcon}
+              label="Total Groups"
+              value={groups.length}
+              color="green"
+            />
+            <StatsCard
+              icon={UsersIcon}
+              label="Total Members"
+              value={groups.reduce((sum, g) => sum + (g.members?.length || 0), 0)}
+              color="blue"
+            />
+            <StatsCard
+              icon={SparklesIcon}
+              label="Active Orders"
+              value={groups.reduce((sum, g) => sum + (g.currentOrders?.length || 0), 0)}
+              color="purple"
+            />
+          </div>
+        )}
 
         {/* Groups Grid */}
         {loading ? (
@@ -169,10 +248,7 @@ export default function Groups() {
         {showCreateForm && (
           <CreateGroupModal 
             onClose={() => setShowCreateForm(false)}
-            onSuccess={() => {
-              setShowCreateForm(false);
-              fetchGroups();
-            }}
+            onSuccess={handleCreateSuccess}
             userLocation={userLocation}
           />
         )}
@@ -211,8 +287,11 @@ function GroupCard({ group, onJoin, onViewDetails, currentUserId }) {
     e.preventDefault();
     e.stopPropagation();
     setIsJoining(true);
-    await onJoin(group.id);
-    setIsJoining(false);
+    try {
+      await onJoin(group.id);
+    } finally {
+      setIsJoining(false);
+    }
   };
 
   const handleViewClick = (e) => {
@@ -222,7 +301,7 @@ function GroupCard({ group, onJoin, onViewDetails, currentUserId }) {
 
   return (
     <div className="group bg-white rounded-xl shadow-md hover:shadow-2xl transition-all duration-300 overflow-hidden transform hover:-translate-y-1">
-      {/* Header with gradient */}
+      {/* Header */}
       <div className="h-32 bg-gradient-to-br from-green-500 to-emerald-600 p-6 relative overflow-hidden">
         <div className="absolute inset-0 opacity-10">
           <div className="absolute -right-10 -top-10 w-40 h-40 bg-white rounded-full"></div>
@@ -233,7 +312,7 @@ function GroupCard({ group, onJoin, onViewDetails, currentUserId }) {
           <div className="flex items-center gap-4 text-white/90 text-sm">
             <span className="flex items-center gap-1">
               <UsersIcon className="h-4 w-4" />
-              {memberCount} members
+              {memberCount} {memberCount === 1 ? 'member' : 'members'}
             </span>
             {activeOrders > 0 && (
               <span className="flex items-center gap-1">
@@ -317,7 +396,7 @@ function EmptyState({ onCreateClick }) {
         <UserGroupIcon className="h-10 w-10 text-green-600" />
       </div>
       <h3 className="text-2xl font-bold text-gray-800 mb-2">No groups found nearby</h3>
-      <p className="text-gray-600 mb-6 max-w-md mx-auto">
+      <p className="text-gray-600 mb-6 max-w-md mx-auto px-4">
         Be the first to create a group in your area and start saving together!
       </p>
       <button
@@ -371,12 +450,14 @@ function CreateGroupModal({ onClose, onSuccess, userLocation }) {
         maxMembers: 50
       });
       
-      console.log('✅ Group created:', groupId);
-      toast.success('Group created successfully!', { icon: '🎉' });
+      console.log('✅ Group created successfully:', groupId);
+      toast.success('Group created successfully!', { icon: '🎉', duration: 3000 });
+      
+      // Call success callback
       onSuccess();
     } catch (error) {
       console.error('❌ Error creating group:', error);
-      toast.error('Failed to create group');
+      toast.error('Failed to create group: ' + error.message);
     } finally {
       setLoading(false);
     }
@@ -453,7 +534,8 @@ function CreateGroupModal({ onClose, onSuccess, userLocation }) {
             <button
               type="button"
               onClick={onClose}
-              className="flex-1 px-4 py-3 border border-gray-300 rounded-lg text-gray-700 font-semibold hover:bg-gray-50 transition-colors"
+              disabled={loading}
+              className="flex-1 px-4 py-3 border border-gray-300 rounded-lg text-gray-700 font-semibold hover:bg-gray-50 transition-colors disabled:opacity-50"
             >
               Cancel
             </button>

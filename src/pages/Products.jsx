@@ -1,10 +1,11 @@
-// src/pages/Products.jsx - ENHANCED WITH TIERED PRICING
+// src/pages/Products.jsx - WITH GROUP ORDER VISIBILITY
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { productService } from '../services/groupService';
+import { productService, orderService, groupService } from '../services/groupService';
 import { useCart } from '../contexts/CartContext';
+import { useAuth } from '../contexts/AuthContext';
 import LoadingSpinner, { SkeletonLoader } from '../components/LoadingSpinner';
-import { ShoppingCartIcon, MagnifyingGlassIcon, FunnelIcon, PlusIcon, MinusIcon, TrashIcon, ChartBarIcon } from '@heroicons/react/24/outline';
+import { ShoppingCartIcon, MagnifyingGlassIcon, FunnelIcon, PlusIcon, MinusIcon, TrashIcon, ChartBarIcon, UsersIcon, CheckCircleIcon, EyeIcon } from '@heroicons/react/24/outline';
 import { HeartIcon, SparklesIcon } from '@heroicons/react/24/solid';
 import toast from 'react-hot-toast';
 
@@ -15,13 +16,74 @@ export default function Products() {
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
   const [sortBy, setSortBy] = useState('featured');
+  const [activeGroupOrder, setActiveGroupOrder] = useState(null);
+  const [userGroups, setUserGroups] = useState([]);
+  const [selectedGroup, setSelectedGroup] = useState(null);
+  const [showGroupOrderView, setShowGroupOrderView] = useState(false);
+  
   const { getCartCount } = useCart();
+  const { currentUser } = useAuth();
   const navigate = useNavigate();
 
   useEffect(() => {
     fetchProducts();
     fetchCategories();
+    fetchUserGroups();
   }, [selectedCategory, sortBy]);
+
+  useEffect(() => {
+    if (selectedGroup) {
+      fetchActiveGroupOrder();
+      
+      // Subscribe to real-time updates
+      const unsubscribe = subscribeToGroupOrder();
+      return () => unsubscribe && unsubscribe();
+    }
+  }, [selectedGroup]);
+
+  const fetchUserGroups = async () => {
+    if (!currentUser) return;
+    
+    try {
+      const groups = await groupService.getUserGroups(currentUser.uid);
+      setUserGroups(groups);
+      
+      if (groups.length > 0 && !selectedGroup) {
+        setSelectedGroup(groups[0]);
+      }
+    } catch (error) {
+      console.error('Error fetching groups:', error);
+    }
+  };
+
+  const fetchActiveGroupOrder = async () => {
+    if (!selectedGroup) return;
+    
+    try {
+      const orders = await orderService.getActiveGroupOrders(selectedGroup.id);
+      if (orders.length > 0) {
+        setActiveGroupOrder(orders[0]);
+      } else {
+        setActiveGroupOrder(null);
+      }
+    } catch (error) {
+      console.error('Error fetching group order:', error);
+    }
+  };
+
+  const subscribeToGroupOrder = () => {
+    if (!selectedGroup) return null;
+    
+    // Get the latest order ID first
+    orderService.getActiveGroupOrders(selectedGroup.id).then(orders => {
+      if (orders.length > 0) {
+        const orderId = orders[0].id;
+        return orderService.subscribeToGroupOrder(orderId, (data) => {
+          setActiveGroupOrder(data);
+        });
+      }
+    });
+  };
 
   const fetchProducts = async () => {
     try {
@@ -29,15 +91,13 @@ export default function Products() {
       const category = selectedCategory === 'all' ? null : selectedCategory;
       let productsData = await productService.getProducts(category);
       
-      // Sort products
       if (sortBy === 'price-low') {
-        productsData = productsData.sort((a, b) => (a.priceTiers?.[0]?.price || a.groupPrice) - (b.priceTiers?.[0]?.price || b.groupPrice));
+        productsData = productsData.sort((a, b) => a.groupPrice - b.groupPrice);
       } else if (sortBy === 'price-high') {
-        productsData = productsData.sort((a, b) => (b.priceTiers?.[0]?.price || b.groupPrice) - (a.priceTiers?.[0]?.price || a.groupPrice));
+        productsData = productsData.sort((a, b) => b.groupPrice - a.groupPrice);
       } else if (sortBy === 'savings') {
         productsData = productsData.sort((a, b) => 
-          (b.retailPrice - (b.priceTiers?.[b.priceTiers.length-1]?.price || b.groupPrice)) - 
-          (a.retailPrice - (a.priceTiers?.[a.priceTiers.length-1]?.price || a.groupPrice))
+          (b.retailPrice - b.groupPrice) - (a.retailPrice - a.groupPrice)
         );
       }
       
@@ -70,69 +130,113 @@ export default function Products() {
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-green-50">
       {/* Sticky Header */}
       <div className="sticky top-14 sm:top-16 z-40 bg-white shadow-md">
-        <div className="max-w-7xl mx-auto px-3 sm:px-4 py-3 sm:py-4">
+        <div className="max-w-7xl mx-auto px-4 py-4">
           <div className="flex items-center justify-between mb-3">
             <div>
-              <h1 className="text-2xl sm:text-3xl lg:text-4xl font-bold bg-gradient-to-r from-green-600 to-emerald-600 bg-clip-text text-transparent">
+              <h1 className="text-3xl font-bold bg-gradient-to-r from-green-600 to-emerald-600 bg-clip-text text-transparent">
                 Products
               </h1>
-              <p className="text-xs sm:text-sm text-gray-600 mt-0.5">
-                <SparklesIcon className="inline h-4 w-4 text-yellow-500" /> Tiered pricing • Save more when group buys more
-              </p>
-            </div>
-            <button 
-              onClick={() => navigate('/cart')}
-              className="relative px-4 sm:px-6 py-2.5 sm:py-3 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-lg sm:rounded-xl font-bold hover:shadow-xl transform hover:-translate-y-0.5 transition-all duration-200 flex items-center gap-2 text-sm sm:text-base"
-            >
-              <ShoppingCartIcon className="h-5 w-5 sm:h-6 sm:w-6" />
-              <span className="hidden sm:inline">Cart</span>
-              {cartCount > 0 && (
-                <span className="absolute -top-2 -right-2 bg-red-500 text-white text-xs rounded-full h-5 w-5 sm:h-6 sm:w-6 flex items-center justify-center font-bold animate-pulse">
-                  {cartCount}
-                </span>
+              {selectedGroup && (
+                <p className="text-sm text-gray-600 mt-1">
+                  Shopping for: <span className="font-semibold text-green-600">{selectedGroup.name}</span>
+                </p>
               )}
-            </button>
+            </div>
+            
+            <div className="flex gap-3">
+              {/* Group Order View Button */}
+              {activeGroupOrder && (
+                <button
+                  onClick={() => setShowGroupOrderView(!showGroupOrderView)}
+                  className="relative px-4 py-2 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 transition flex items-center gap-2"
+                >
+                  <EyeIcon className="h-5 w-5" />
+                  <span className="hidden sm:inline">Group Order</span>
+                  <span className="absolute -top-2 -right-2 bg-purple-500 text-white text-xs rounded-full h-6 w-6 flex items-center justify-center font-bold">
+                    {activeGroupOrder.totalParticipants || 0}
+                  </span>
+                </button>
+              )}
+              
+              {/* Cart Button */}
+              <button 
+                onClick={() => navigate('/cart')}
+                className="relative px-4 py-2 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-lg font-semibold hover:shadow-lg transition flex items-center gap-2"
+              >
+                <ShoppingCartIcon className="h-5 w-5" />
+                <span className="hidden sm:inline">Cart</span>
+                {cartCount > 0 && (
+                  <span className="absolute -top-2 -right-2 bg-red-500 text-white text-xs rounded-full h-6 w-6 flex items-center justify-center font-bold">
+                    {cartCount}
+                  </span>
+                )}
+              </button>
+            </div>
           </div>
 
-          {/* Search and Filter */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-3">
+          {/* Search and Filters */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div className="sm:col-span-2 relative">
-              <MagnifyingGlassIcon className="h-4 w-4 sm:h-5 sm:w-5 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <MagnifyingGlassIcon className="h-5 w-5 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
               <input
                 type="text"
                 placeholder="Search products..."
-                className="w-full pl-9 sm:pl-10 pr-3 py-2 sm:py-2.5 text-sm sm:text-base border-2 border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500 transition"
+                className="w-full pl-10 pr-3 py-2 border-2 border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
               />
             </div>
 
-            <div className="relative">
-              <FunnelIcon className="h-4 w-4 sm:h-5 sm:w-5 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-              <select
-                className="w-full pl-9 sm:pl-10 pr-3 py-2 sm:py-2.5 text-sm sm:text-base border-2 border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500 appearance-none bg-white transition cursor-pointer"
-                value={sortBy}
-                onChange={(e) => setSortBy(e.target.value)}
-              >
-                <option value="featured">Featured</option>
-                <option value="price-low">Price: Low to High</option>
-                <option value="price-high">Price: High to Low</option>
-                <option value="savings">Highest Savings</option>
-              </select>
-            </div>
+            <select
+              className="px-3 py-2 border-2 border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 appearance-none bg-white cursor-pointer"
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value)}
+            >
+              <option value="featured">Featured</option>
+              <option value="price-low">Price: Low to High</option>
+              <option value="price-high">Price: High to Low</option>
+              <option value="savings">Highest Savings</option>
+            </select>
           </div>
         </div>
       </div>
 
-      <div className="max-w-7xl mx-auto px-3 sm:px-4 lg:px-6 py-4">
+      <div className="max-w-7xl mx-auto px-4 py-6">
+        {/* Group Selector */}
+        {userGroups.length > 1 && (
+          <div className="mb-6 bg-white rounded-xl p-4 shadow-md">
+            <label className="block text-sm font-semibold text-gray-700 mb-2">Select Group:</label>
+            <select
+              className="w-full px-4 py-2 border-2 border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+              value={selectedGroup?.id || ''}
+              onChange={(e) => {
+                const group = userGroups.find(g => g.id === e.target.value);
+                setSelectedGroup(group);
+              }}
+            >
+              {userGroups.map(group => (
+                <option key={group.id} value={group.id}>{group.name}</option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {/* Group Order Overview */}
+        {showGroupOrderView && activeGroupOrder && (
+          <GroupOrderOverview 
+            groupOrder={activeGroupOrder} 
+            onClose={() => setShowGroupOrderView(false)}
+          />
+        )}
+
         {/* Category Filters */}
-        <div className="mb-4 sm:mb-6">
-          <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide scroll-smooth">
+        <div className="mb-6">
+          <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
             <button
               onClick={() => setSelectedCategory('all')}
-              className={`flex-shrink-0 px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg text-sm sm:text-base whitespace-nowrap font-medium transition-all duration-200 ${
+              className={`flex-shrink-0 px-4 py-2 rounded-lg font-medium transition ${
                 selectedCategory === 'all'
-                  ? 'bg-gradient-to-r from-green-600 to-emerald-600 text-white shadow-lg scale-105'
+                  ? 'bg-gradient-to-r from-green-600 to-emerald-600 text-white shadow-lg'
                   : 'bg-white text-gray-700 hover:bg-gray-100 border border-gray-200'
               }`}
             >
@@ -142,9 +246,9 @@ export default function Products() {
               <button
                 key={category.id}
                 onClick={() => setSelectedCategory(category.id)}
-                className={`flex-shrink-0 px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg text-sm sm:text-base whitespace-nowrap font-medium transition-all duration-200 ${
+                className={`flex-shrink-0 px-4 py-2 rounded-lg font-medium transition ${
                   selectedCategory === category.id
-                    ? 'bg-gradient-to-r from-green-600 to-emerald-600 text-white shadow-lg scale-105'
+                    ? 'bg-gradient-to-r from-green-600 to-emerald-600 text-white shadow-lg'
                     : 'bg-white text-gray-700 hover:bg-gray-100 border border-gray-200'
                 }`}
               >
@@ -156,24 +260,28 @@ export default function Products() {
 
         {/* Products Grid */}
         {loading ? (
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4 lg:gap-6">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
             <SkeletonLoader type="product" count={8} />
           </div>
         ) : filteredProducts.length === 0 ? (
-          <div className="text-center py-12 sm:py-16 bg-white rounded-xl sm:rounded-2xl shadow-lg">
-            <ShoppingCartIcon className="h-12 w-12 sm:h-16 sm:w-16 text-gray-400 mx-auto mb-4" />
-            <h3 className="text-lg sm:text-2xl font-semibold text-gray-600 mb-2">No products found</h3>
-            <p className="text-sm sm:text-base text-gray-500">Try adjusting your search or filters</p>
+          <div className="text-center py-16 bg-white rounded-xl shadow-lg">
+            <ShoppingCartIcon className="h-16 w-16 text-gray-400 mx-auto mb-4" />
+            <h3 className="text-2xl font-semibold text-gray-600 mb-2">No products found</h3>
+            <p className="text-gray-500">Try adjusting your search or filters</p>
           </div>
         ) : (
           <>
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4 lg:gap-6">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
               {filteredProducts.map((product) => (
-                <ProductCard key={product.id} product={product} />
+                <ProductCard 
+                  key={product.id} 
+                  product={product}
+                  groupOrderProgress={activeGroupOrder?.productQuantities?.[product.id]}
+                />
               ))}
             </div>
             
-            <div className="mt-6 sm:mt-8 text-center text-sm sm:text-base text-gray-600">
+            <div className="mt-8 text-center text-gray-600">
               Showing {filteredProducts.length} {filteredProducts.length === 1 ? 'product' : 'products'}
             </div>
           </>
@@ -183,34 +291,109 @@ export default function Products() {
   );
 }
 
-// Enhanced Product Card with Tiered Pricing
-function ProductCard({ product }) {
-  const [isFavorite, setIsFavorite] = useState(false);
-  const [showTiers, setShowTiers] = useState(false);
-  const { addToCart, isInCart, getItemQuantity, incrementQuantity, decrementQuantity, removeFromCart } = useCart();
-  
-  // Calculate pricing tiers or use default
-  const priceTiers = product.priceTiers || [
-    { minQty: 0, maxQty: 20, price: product.retailPrice * 0.95, label: 'Small' },
-    { minQty: 21, maxQty: 49, price: product.retailPrice * 0.88, label: 'Medium' },
-    { minQty: 50, maxQty: null, price: product.groupPrice || product.retailPrice * 0.80, label: 'Bulk' }
-  ];
+// Group Order Overview Component
+function GroupOrderOverview({ groupOrder, onClose }) {
+  return (
+    <div className="mb-6 bg-gradient-to-br from-blue-50 to-cyan-50 rounded-xl p-6 shadow-lg border-2 border-blue-200">
+      <div className="flex justify-between items-start mb-4">
+        <div>
+          <h3 className="text-xl font-bold text-blue-900 flex items-center gap-2">
+            <UsersIcon className="h-6 w-6" />
+            Active Group Order
+          </h3>
+          <p className="text-sm text-blue-700 mt-1">See what everyone is ordering</p>
+        </div>
+        <button
+          onClick={onClose}
+          className="text-blue-600 hover:text-blue-800 font-bold text-xl"
+        >
+          ×
+        </button>
+      </div>
 
-  const bestPrice = priceTiers[priceTiers.length - 1].price;
-  const discount = Math.round(((product.retailPrice - bestPrice) / product.retailPrice) * 100);
-  const maxSavings = product.retailPrice - bestPrice;
+      <div className="grid grid-cols-3 gap-4 mb-4">
+        <div className="bg-white rounded-lg p-3 text-center">
+          <p className="text-2xl font-bold text-blue-600">{groupOrder.totalParticipants || 0}</p>
+          <p className="text-xs text-gray-600">Members</p>
+        </div>
+        <div className="bg-white rounded-lg p-3 text-center">
+          <p className="text-2xl font-bold text-green-600">₹{groupOrder.totalAmount?.toLocaleString() || 0}</p>
+          <p className="text-xs text-gray-600">Total Value</p>
+        </div>
+        <div className="bg-white rounded-lg p-3 text-center">
+          <p className="text-2xl font-bold text-purple-600">
+            {Object.keys(groupOrder.productQuantities || {}).length}
+          </p>
+          <p className="text-xs text-gray-600">Products</p>
+        </div>
+      </div>
+
+      {groupOrder.productQuantities && Object.keys(groupOrder.productQuantities).length > 0 ? (
+        <div className="bg-white rounded-lg p-4 max-h-96 overflow-y-auto">
+          <h4 className="font-semibold mb-3">Products Being Ordered:</h4>
+          <div className="space-y-3">
+            {Object.entries(groupOrder.productQuantities).map(([productId, data]) => (
+              <div key={productId} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                <div className="flex-1">
+                  <p className="font-medium text-gray-800">{data.name}</p>
+                  <p className="text-sm text-gray-600">
+                    {data.participants?.length || 0} members • {data.quantity} units
+                  </p>
+                  <div className="mt-1 w-full bg-gray-200 rounded-full h-2">
+                    <div 
+                      className={`h-full rounded-full ${
+                        data.quantity >= data.minQuantity ? 'bg-green-600' : 'bg-orange-500'
+                      }`}
+                      style={{ width: `${Math.min((data.quantity / data.minQuantity) * 100, 100)}%` }}
+                    />
+                  </div>
+                </div>
+                {data.quantity >= data.minQuantity ? (
+                  <CheckCircleIcon className="h-8 w-8 text-green-600 ml-3" />
+                ) : (
+                  <span className="ml-3 text-sm font-bold text-orange-600">
+                    {data.minQuantity - data.quantity} more
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <div className="bg-white rounded-lg p-8 text-center">
+          <ShoppingCartIcon className="h-12 w-12 text-gray-400 mx-auto mb-2" />
+          <p className="text-gray-600">No products in group order yet</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Product Card Component
+function ProductCard({ product, groupOrderProgress }) {
+  const [isFavorite, setIsFavorite] = useState(false);
+  const { addToCart, isInCart, getItemQuantity, incrementQuantity, decrementQuantity, removeFromCart } = useCart();
   
   const inCart = isInCart(product.id);
   const quantity = getItemQuantity(product.id);
+  
+  // Group order stats
+  const groupQuantity = groupOrderProgress?.quantity || 0;
+  const minQuantity = product.minQuantity || 50;
+  const membersOrdering = groupOrderProgress?.participants?.length || 0;
+  const progress = Math.min((groupQuantity / minQuantity) * 100, 100);
+  const isMinimumMet = groupQuantity >= minQuantity;
+
+  const discount = Math.round(((product.retailPrice - product.groupPrice) / product.retailPrice) * 100);
 
   const handleAddToCart = async () => {
     await addToCart(product, 1);
   };
 
   return (
-    <div className="group bg-white rounded-xl sm:rounded-2xl shadow-md overflow-hidden hover:shadow-xl transition-all duration-300 transform hover:-translate-y-1">
+    <div className="group bg-white rounded-xl shadow-md overflow-hidden hover:shadow-xl transition-all duration-300 transform hover:-translate-y-1">
       {/* Product Image */}
-      <div className="relative h-32 sm:h-40 lg:h-48 bg-gradient-to-br from-gray-100 to-gray-200 overflow-hidden">
+      <div className="relative h-48 bg-gradient-to-br from-gray-100 to-gray-200 overflow-hidden">
         {product.imageUrl ? (
           <img
             src={product.imageUrl}
@@ -219,111 +402,107 @@ function ProductCard({ product }) {
           />
         ) : (
           <div className="w-full h-full flex items-center justify-center">
-            <ShoppingCartIcon className="h-12 w-12 sm:h-16 sm:w-16 text-gray-300" />
+            <ShoppingCartIcon className="h-16 w-16 text-gray-300" />
           </div>
         )}
         
         {/* Badges */}
         <div className="absolute top-2 left-2 right-2 flex justify-between items-start">
           {discount > 0 && (
-            <span className="px-2 py-0.5 sm:px-2.5 sm:py-1 bg-red-500 text-white rounded-full text-xs sm:text-sm font-bold shadow-lg">
-              UP TO {discount}% OFF
+            <span className="px-2 py-1 bg-red-500 text-white rounded-full text-xs font-bold shadow-lg">
+              {discount}% OFF
             </span>
           )}
           <button
             onClick={() => setIsFavorite(!isFavorite)}
-            className="p-1.5 sm:p-2 bg-white/90 backdrop-blur-sm rounded-full hover:bg-white transition shadow-lg"
+            className="p-2 bg-white/90 backdrop-blur-sm rounded-full hover:bg-white transition shadow-lg"
           >
-            <HeartIcon className={`h-4 w-4 sm:h-5 sm:w-5 ${isFavorite ? 'text-red-500' : 'text-gray-400'}`} />
+            <HeartIcon className={`h-5 w-5 ${isFavorite ? 'text-red-500' : 'text-gray-400'}`} />
           </button>
         </div>
+
+        {/* Group Progress Badge */}
+        {membersOrdering > 0 && (
+          <div className="absolute bottom-2 left-2 right-2">
+            <div className="bg-white/95 backdrop-blur-sm rounded-lg p-2 shadow-lg">
+              <div className="flex items-center justify-between text-xs mb-1">
+                <span className="font-semibold text-gray-700 flex items-center gap-1">
+                  <UsersIcon className="h-3 w-3" />
+                  {membersOrdering} ordering
+                </span>
+                <span className={`font-bold ${isMinimumMet ? 'text-green-600' : 'text-orange-600'}`}>
+                  {groupQuantity}/{minQuantity}
+                </span>
+              </div>
+              <div className="w-full bg-gray-200 rounded-full h-1.5">
+                <div 
+                  className={`h-full rounded-full ${isMinimumMet ? 'bg-green-600' : 'bg-orange-500'}`}
+                  style={{ width: `${progress}%` }}
+                />
+              </div>
+            </div>
+          </div>
+        )}
       </div>
       
       {/* Product Info */}
-      <div className="p-2.5 sm:p-3 lg:p-4">
-        <h3 className="font-bold text-gray-800 mb-1.5 sm:mb-2 line-clamp-2 text-xs sm:text-sm lg:text-base min-h-[2.5rem] sm:min-h-[3rem]">
+      <div className="p-4">
+        <h3 className="font-bold text-gray-800 mb-2 line-clamp-2 min-h-[3rem]">
           {product.name}
         </h3>
         
-        {/* Tiered Pricing Display */}
-        <div className="space-y-1 sm:space-y-1.5 mb-2.5 sm:mb-3">
-          <div className="flex justify-between items-center text-xs sm:text-sm">
-            <span className="text-gray-500">Retail:</span>
+        {/* Pricing */}
+        <div className="space-y-2 mb-3">
+          <div className="flex justify-between items-center">
+            <span className="text-sm text-gray-500">Retail:</span>
             <span className="text-red-600 line-through font-medium">₹{product.retailPrice}</span>
           </div>
           
-          {/* Best Price */}
           <div className="flex justify-between items-center">
-            <span className="text-xs sm:text-sm font-semibold text-gray-700">Best Price:</span>
-            <span className="text-base sm:text-lg lg:text-xl text-green-600 font-bold">₹{bestPrice}</span>
+            <span className="text-sm font-semibold text-gray-700">Group Price:</span>
+            <span className="text-xl text-green-600 font-bold">₹{product.groupPrice}</span>
           </div>
 
-          {/* Tiered Pricing Toggle */}
-          <button
-            onClick={() => setShowTiers(!showTiers)}
-            className="w-full py-1 px-2 bg-blue-50 hover:bg-blue-100 rounded text-xs text-blue-600 font-medium transition flex items-center justify-center gap-1"
-          >
-            <ChartBarIcon className="h-3 w-3" />
-            {showTiers ? 'Hide' : 'View'} Pricing Tiers
-          </button>
-
-          {/* Pricing Tiers Dropdown */}
-          {showTiers && (
-            <div className="mt-2 p-2 bg-gradient-to-br from-blue-50 to-cyan-50 rounded-lg border border-blue-200 space-y-1.5 animate-fade-in">
-              {priceTiers.map((tier, index) => (
-                <div key={index} className="flex justify-between items-center text-xs">
-                  <span className="text-gray-700 font-medium">
-                    {tier.minQty}+ units:
-                  </span>
-                  <span className="text-green-700 font-bold">₹{tier.price}</span>
-                </div>
-              ))}
-              <div className="pt-1.5 border-t border-blue-200 text-xs text-gray-600 italic">
-                💡 More group orders = Lower prices!
-              </div>
-            </div>
-          )}
-
-          <div className="pt-1 sm:pt-1.5 border-t border-gray-100">
+          <div className="pt-2 border-t border-gray-100">
             <div className="flex items-center justify-between">
-              <span className="text-xs text-gray-500">Max Save:</span>
-              <span className="text-green-700 font-bold text-xs sm:text-sm">₹{maxSavings}</span>
+              <span className="text-xs text-gray-500">You Save:</span>
+              <span className="text-green-700 font-bold">₹{product.retailPrice - product.groupPrice}</span>
             </div>
           </div>
         </div>
         
         {/* Cart Controls */}
         {inCart ? (
-          <div className="space-y-1.5 sm:space-y-2">
-            <div className="flex items-center justify-between bg-gray-100 rounded-lg p-1.5 sm:p-2">
+          <div className="space-y-2">
+            <div className="flex items-center justify-between bg-gray-100 rounded-lg p-2">
               <button
                 onClick={() => decrementQuantity(product.id)}
-                className="p-1.5 sm:p-2 bg-white rounded-md hover:bg-gray-200 transition shadow-sm"
+                className="p-2 bg-white rounded-md hover:bg-gray-200 transition shadow-sm"
               >
-                <MinusIcon className="h-3 w-3 sm:h-4 sm:w-4 text-gray-700" />
+                <MinusIcon className="h-4 w-4 text-gray-700" />
               </button>
-              <span className="font-bold text-base sm:text-lg px-3 sm:px-4">{quantity}</span>
+              <span className="font-bold text-lg px-4">{quantity}</span>
               <button
                 onClick={() => incrementQuantity(product.id)}
-                className="p-1.5 sm:p-2 bg-white rounded-md hover:bg-gray-200 transition shadow-sm"
+                className="p-2 bg-white rounded-md hover:bg-gray-200 transition shadow-sm"
               >
-                <PlusIcon className="h-3 w-3 sm:h-4 sm:w-4 text-gray-700" />
+                <PlusIcon className="h-4 w-4 text-gray-700" />
               </button>
             </div>
             <button
               onClick={() => removeFromCart(product.id)}
-              className="w-full py-1.5 sm:py-2 bg-red-100 text-red-600 rounded-lg font-semibold hover:bg-red-200 transition flex items-center justify-center gap-1.5 sm:gap-2 text-xs sm:text-sm"
+              className="w-full py-2 bg-red-100 text-red-600 rounded-lg font-semibold hover:bg-red-200 transition flex items-center justify-center gap-2"
             >
-              <TrashIcon className="h-3 w-3 sm:h-4 sm:w-4" />
+              <TrashIcon className="h-4 w-4" />
               Remove
             </button>
           </div>
         ) : (
           <button
             onClick={handleAddToCart}
-            className="w-full py-2 sm:py-2.5 lg:py-3 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-lg sm:rounded-xl font-bold hover:shadow-xl transform hover:-translate-y-0.5 transition-all duration-200 flex items-center justify-center gap-1.5 sm:gap-2 text-xs sm:text-sm lg:text-base"
+            className="w-full py-3 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-xl font-bold hover:shadow-xl transform hover:-translate-y-0.5 transition-all duration-200 flex items-center justify-center gap-2"
           >
-            <ShoppingCartIcon className="h-4 w-4 sm:h-5 sm:w-5" />
+            <ShoppingCartIcon className="h-5 w-5" />
             Add to Cart
           </button>
         )}
