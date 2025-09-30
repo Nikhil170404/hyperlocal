@@ -1,4 +1,4 @@
-// src/pages/GroupOrderDetail.jsx - ENHANCED FOR BULK BUYING VIEW
+// src/pages/GroupOrderDetail.jsx - COMPLETE WITH INDIVIDUAL ALLOCATIONS
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
@@ -16,7 +16,8 @@ import {
   ArrowLeftIcon,
   CreditCardIcon,
   ChartBarIcon,
-  UsersIcon
+  UsersIcon,
+  SparklesIcon
 } from '@heroicons/react/24/outline';
 import toast from 'react-hot-toast';
 
@@ -25,6 +26,7 @@ export default function GroupOrderDetail() {
   const [groupOrder, setGroupOrder] = useState(null);
   const [loading, setLoading] = useState(true);
   const [paymentProcessing, setPaymentProcessing] = useState(false);
+  const [showAllParticipants, setShowAllParticipants] = useState(false);
   const { currentUser, userProfile } = useAuth();
   const navigate = useNavigate();
 
@@ -130,6 +132,7 @@ export default function GroupOrderDetail() {
   const totalPaid = groupOrder.participants?.filter(p => p.paymentStatus === 'paid').length || 0;
   const totalParticipants = groupOrder.participants?.length || 0;
   const paymentProgress = totalParticipants > 0 ? (totalPaid / totalParticipants) * 100 : 0;
+  const displayedParticipants = showAllParticipants ? groupOrder.participants : groupOrder.participants?.slice(0, 5);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-green-50 px-4 py-8">
@@ -184,9 +187,11 @@ export default function GroupOrderDetail() {
           </div>
           <div className="w-full bg-gray-200 rounded-full h-4 overflow-hidden">
             <div 
-              className="h-full bg-gradient-to-r from-green-600 to-emerald-600 rounded-full transition-all duration-500"
+              className="h-full bg-gradient-to-r from-green-600 to-emerald-600 rounded-full transition-all duration-500 relative"
               style={{ width: `${paymentProgress}%` }}
-            />
+            >
+              <div className="absolute inset-0 bg-white/30 animate-pulse"></div>
+            </div>
           </div>
           <p className="text-sm text-gray-600 mt-2">
             {totalPaid} out of {totalParticipants} members have paid
@@ -201,70 +206,13 @@ export default function GroupOrderDetail() {
               Bulk Buying Progress (All Members Combined)
             </h3>
             <div className="space-y-4">
-              {Object.entries(groupOrder.productQuantities).map(([productId, data]) => {
-                const progress = (data.quantity / data.minQuantity) * 100;
-                const isMet = data.quantity >= data.minQuantity;
-                const remaining = Math.max(data.minQuantity - data.quantity, 0);
-                
-                return (
-                  <div key={productId} className="border border-gray-200 rounded-xl p-4 hover:shadow-md transition">
-                    <div className="flex justify-between items-start mb-3">
-                      <div>
-                        <h4 className="font-semibold text-gray-800 text-lg">{data.name}</h4>
-                        <p className="text-sm text-gray-600">
-                          Group Price: ₹{data.price} per unit
-                        </p>
-                      </div>
-                      {isMet ? (
-                        <span className="px-3 py-1 bg-green-100 text-green-800 rounded-full text-sm font-bold flex items-center gap-1">
-                          <CheckCircleIcon className="h-4 w-4" />
-                          Minimum Met!
-                        </span>
-                      ) : (
-                        <span className="px-3 py-1 bg-orange-100 text-orange-800 rounded-full text-sm font-bold">
-                          Need {remaining} more
-                        </span>
-                      )}
-                    </div>
-
-                    {/* Progress Bar */}
-                    <div className="mb-3">
-                      <div className="flex justify-between text-sm mb-1">
-                        <span className="text-gray-600">Current / Minimum</span>
-                        <span className="font-bold text-gray-800">
-                          {data.quantity} / {data.minQuantity} units
-                        </span>
-                      </div>
-                      <div className="w-full bg-gray-200 rounded-full h-3 overflow-hidden">
-                        <div 
-                          className={`h-full rounded-full transition-all duration-500 ${
-                            isMet 
-                              ? 'bg-gradient-to-r from-green-600 to-emerald-600' 
-                              : 'bg-gradient-to-r from-orange-500 to-yellow-500'
-                          }`}
-                          style={{ width: `${Math.min(progress, 100)}%` }}
-                        />
-                      </div>
-                    </div>
-
-                    {/* Stats */}
-                    <div className="grid grid-cols-3 gap-4 text-center">
-                      <div className="bg-gray-50 rounded-lg p-2">
-                        <p className="text-xs text-gray-600">Current</p>
-                        <p className="text-lg font-bold text-gray-800">{data.quantity}</p>
-                      </div>
-                      <div className="bg-gray-50 rounded-lg p-2">
-                        <p className="text-xs text-gray-600">Minimum</p>
-                        <p className="text-lg font-bold text-gray-800">{data.minQuantity}</p>
-                      </div>
-                      <div className="bg-gray-50 rounded-lg p-2">
-                        <p className="text-xs text-gray-600">Progress</p>
-                        <p className="text-lg font-bold text-green-600">{Math.round(progress)}%</p>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
+              {Object.entries(groupOrder.productQuantities).map(([productId, data]) => (
+                <ProductAggregationCard
+                  key={productId}
+                  productId={productId}
+                  data={data}
+                />
+              ))}
             </div>
 
             {/* Overall Status */}
@@ -365,24 +313,131 @@ export default function GroupOrderDetail() {
 
         {/* All Participants - Shows Everyone's Orders */}
         <div className="bg-white rounded-2xl shadow-lg p-6">
-          <h3 className="text-xl font-bold mb-6 flex items-center gap-2">
-            <UsersIcon className="h-6 w-6 text-purple-600" />
-            All Group Members ({totalParticipants} Participants)
-          </h3>
-          {groupOrder.participants && groupOrder.participants.length > 0 ? (
+          <div className="flex justify-between items-center mb-6">
+            <h3 className="text-xl font-bold flex items-center gap-2">
+              <UsersIcon className="h-6 w-6 text-purple-600" />
+              All Group Members ({totalParticipants} Participants)
+            </h3>
+            {totalParticipants > 5 && (
+              <button
+                onClick={() => setShowAllParticipants(!showAllParticipants)}
+                className="text-sm text-green-600 font-semibold hover:text-green-700"
+              >
+                {showAllParticipants ? 'Show Less' : `Show All (${totalParticipants})`}
+              </button>
+            )}
+          </div>
+          
+          {displayedParticipants && displayedParticipants.length > 0 ? (
             <div className="space-y-3">
-              {groupOrder.participants.map((participant, index) => (
+              {displayedParticipants.map((participant, index) => (
                 <ParticipantCard 
                   key={index} 
                   participant={participant}
                   isCurrentUser={participant.userId === currentUser.uid}
-                  index={index + 1}
+                  index={groupOrder.participants.indexOf(participant) + 1}
                 />
               ))}
             </div>
           ) : (
             <p className="text-center text-gray-500 py-8">No participants yet</p>
           )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Product Aggregation Card
+function ProductAggregationCard({ productId, data }) {
+  const progress = (data.quantity / data.minQuantity) * 100;
+  const isMet = data.quantity >= data.minQuantity;
+  const remaining = Math.max(data.minQuantity - data.quantity, 0);
+  const savings = ((data.retailPrice - data.price) / data.retailPrice) * 100;
+  
+  return (
+    <div className="border border-gray-200 rounded-xl p-4 hover:shadow-md transition">
+      <div className="flex justify-between items-start mb-3">
+        <div>
+          <h4 className="font-semibold text-gray-800 text-lg">{data.name}</h4>
+          <p className="text-sm text-gray-600">
+            Group Price: ₹{data.price} per unit ({Math.round(savings)}% off retail)
+          </p>
+        </div>
+        {isMet ? (
+          <span className="px-3 py-1 bg-green-100 text-green-800 rounded-full text-sm font-bold flex items-center gap-1">
+            <CheckCircleIcon className="h-4 w-4" />
+            Minimum Met!
+          </span>
+        ) : (
+          <span className="px-3 py-1 bg-orange-100 text-orange-800 rounded-full text-sm font-bold">
+            Need {remaining} more
+          </span>
+        )}
+      </div>
+
+      {/* Progress Bar */}
+      <div className="mb-3">
+        <div className="flex justify-between text-sm mb-1">
+          <span className="text-gray-600">Current / Minimum</span>
+          <span className="font-bold text-gray-800">
+            {data.quantity} / {data.minQuantity} units
+          </span>
+        </div>
+        <div className="w-full bg-gray-200 rounded-full h-3 overflow-hidden">
+          <div 
+            className={`h-full rounded-full transition-all duration-500 ${
+              isMet 
+                ? 'bg-gradient-to-r from-green-600 to-emerald-600' 
+                : 'bg-gradient-to-r from-orange-500 to-yellow-500'
+            }`}
+            style={{ width: `${Math.min(progress, 100)}%` }}
+          />
+        </div>
+      </div>
+
+      {/* Stats */}
+      <div className="grid grid-cols-3 gap-4 text-center mb-3">
+        <div className="bg-gray-50 rounded-lg p-2">
+          <p className="text-xs text-gray-600">Current</p>
+          <p className="text-lg font-bold text-gray-800">{data.quantity}</p>
+        </div>
+        <div className="bg-gray-50 rounded-lg p-2">
+          <p className="text-xs text-gray-600">Minimum</p>
+          <p className="text-lg font-bold text-gray-800">{data.minQuantity}</p>
+        </div>
+        <div className="bg-gray-50 rounded-lg p-2">
+          <p className="text-xs text-gray-600">Progress</p>
+          <p className="text-lg font-bold text-green-600">{Math.round(progress)}%</p>
+        </div>
+      </div>
+
+      {/* Participants ordering this product */}
+      {data.participants && data.participants.length > 0 && (
+        <div className="border-t pt-3 mt-3">
+          <p className="text-xs text-gray-600 mb-2 font-semibold">
+            {data.participants.length} {data.participants.length === 1 ? 'member' : 'members'} ordering:
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {data.participants.slice(0, 5).map((p, idx) => (
+              <span key={idx} className="text-xs bg-blue-50 text-blue-700 px-2 py-1 rounded-full">
+                {p.userName} ({p.quantity})
+              </span>
+            ))}
+            {data.participants.length > 5 && (
+              <span className="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded-full">
+                +{data.participants.length - 5} more
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Total Value */}
+      <div className="border-t pt-3 mt-3">
+        <div className="flex justify-between items-center">
+          <span className="text-sm text-gray-600">Total Value:</span>
+          <span className="text-lg font-bold text-purple-600">₹{data.totalValue?.toLocaleString() || 0}</span>
         </div>
       </div>
     </div>
@@ -409,7 +464,7 @@ function StatCard({ title, value, icon: Icon, color }) {
   );
 }
 
-// Participant Card Component - Shows Individual Member's Order
+// Participant Card Component
 function ParticipantCard({ participant, isCurrentUser, index }) {
   const [showDetails, setShowDetails] = useState(false);
 

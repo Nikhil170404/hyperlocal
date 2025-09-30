@@ -1,11 +1,11 @@
-// src/pages/Cart.jsx - ENHANCED WITH PROGRESS TRACKING
+// src/pages/Cart.jsx - ENHANCED WITH REAL-TIME BULK PROGRESS
 import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useCart } from '../contexts/CartContext';
 import { groupService, orderService } from '../services/groupService';
 import { paymentService } from '../services/paymentService';
-import { TrashIcon, MinusIcon, PlusIcon, UserGroupIcon, ShoppingBagIcon, ExclamationCircleIcon, ClockIcon, SparklesIcon } from '@heroicons/react/24/outline';
+import { TrashIcon, MinusIcon, PlusIcon, UserGroupIcon, ShoppingBagIcon, ExclamationCircleIcon, ClockIcon, SparklesIcon, UsersIcon } from '@heroicons/react/24/outline';
 import toast from 'react-hot-toast';
 import LoadingSpinner from '../components/LoadingSpinner';
 
@@ -16,6 +16,7 @@ export default function Cart() {
   const [processingPayment, setProcessingPayment] = useState(false);
   const [validationErrors, setValidationErrors] = useState([]);
   const [groupProgress, setGroupProgress] = useState({});
+  const [activeGroupOrder, setActiveGroupOrder] = useState(null);
   const [paymentDeadline, setPaymentDeadline] = useState(null);
   const [isEarlyBird, setIsEarlyBird] = useState(false);
   
@@ -78,7 +79,11 @@ export default function Cart() {
       
       if (activeOrders.length > 0) {
         const currentOrder = activeOrders[0];
+        setActiveGroupOrder(currentOrder);
         setGroupProgress(currentOrder.productQuantities || {});
+      } else {
+        setGroupProgress({});
+        setActiveGroupOrder(null);
       }
     } catch (error) {
       console.error('Error fetching group progress:', error);
@@ -86,12 +91,10 @@ export default function Cart() {
   };
 
   const calculatePaymentDeadline = () => {
-    // Calculate 48-hour payment window from order creation
     const deadline = new Date();
     deadline.setHours(deadline.getHours() + 48);
     setPaymentDeadline(deadline);
 
-    // Check if eligible for early bird (first 24 hours)
     const earlyBirdDeadline = new Date();
     earlyBirdDeadline.setHours(earlyBirdDeadline.getHours() + 24);
     setIsEarlyBird(new Date() < earlyBirdDeadline);
@@ -193,7 +196,7 @@ export default function Cart() {
   const getTotal = () => {
     const DELIVERY_FEE = 30;
     const subtotal = getCartTotal();
-    const earlyBirdDiscount = isEarlyBird ? subtotal * 0.02 : 0; // 2% early bird discount
+    const earlyBirdDiscount = isEarlyBird ? subtotal * 0.02 : 0;
     return subtotal + DELIVERY_FEE - earlyBirdDiscount;
   };
 
@@ -240,6 +243,7 @@ export default function Cart() {
                 key={item.id}
                 item={item}
                 groupProgress={groupProgress[item.id]}
+                activeGroupOrder={activeGroupOrder}
                 onIncrement={() => incrementQuantity(item.id)}
                 onDecrement={() => decrementQuantity(item.id)}
                 onRemove={() => removeFromCart(item.id)}
@@ -256,6 +260,14 @@ export default function Cart() {
               setSelectedGroup={setSelectedGroup}
               loadingGroups={loadingGroups}
             />
+
+            {/* Active Group Order Info */}
+            {selectedGroup && activeGroupOrder && (
+              <ActiveGroupOrderInfo
+                activeGroupOrder={activeGroupOrder}
+                selectedGroup={selectedGroup}
+              />
+            )}
 
             {/* Order Summary */}
             <OrderSummary
@@ -278,12 +290,16 @@ export default function Cart() {
 }
 
 // Cart Item with Progress Tracking
-function CartItemWithProgress({ item, groupProgress, onIncrement, onDecrement, onRemove }) {
+function CartItemWithProgress({ item, groupProgress, activeGroupOrder, onIncrement, onDecrement, onRemove }) {
   const currentQty = groupProgress?.quantity || 0;
   const minQty = item.minQuantity || 50;
   const progress = Math.min((currentQty / minQty) * 100, 100);
   const remaining = Math.max(minQty - currentQty, 0);
   const isMet = currentQty >= minQty;
+  
+  // Get participants for this product
+  const participants = groupProgress?.participants || [];
+  const participantCount = participants.length;
 
   return (
     <div className="bg-white rounded-xl sm:rounded-2xl shadow-lg p-3 sm:p-4 lg:p-6 hover:shadow-xl transition-shadow">
@@ -300,11 +316,16 @@ function CartItemWithProgress({ item, groupProgress, onIncrement, onDecrement, o
           <div className="flex justify-between items-start mb-2 sm:mb-3 gap-2">
             <div className="flex-1 min-w-0">
               <h3 className="font-bold text-gray-800 text-sm sm:text-base lg:text-lg mb-1 truncate">{item.name}</h3>
-              {/* Minimum Quantity Progress */}
+              
+              {/* Group Progress Bar */}
               <div className="mb-2">
                 <div className="flex justify-between items-center mb-1 text-xs sm:text-sm">
-                  <span className={`font-medium ${isMet ? 'text-green-600' : 'text-orange-600'}`}>
-                    {isMet ? '✓ Minimum Met' : `${remaining} more needed`}
+                  <span className={`font-medium flex items-center gap-1 ${isMet ? 'text-green-600' : 'text-orange-600'}`}>
+                    {isMet ? (
+                      <>✓ Bulk Price Unlocked</>
+                    ) : (
+                      <>🔒 {remaining} more needed</>
+                    )}
                   </span>
                   <span className="text-gray-600 font-bold">{currentQty}/{minQty}</span>
                 </div>
@@ -320,6 +341,14 @@ function CartItemWithProgress({ item, groupProgress, onIncrement, onDecrement, o
                     <div className="h-full bg-white/30 animate-pulse"></div>
                   </div>
                 </div>
+                
+                {/* Participants Info */}
+                {participantCount > 0 && (
+                  <div className="mt-1 flex items-center gap-1 text-xs text-gray-600">
+                    <UsersIcon className="h-3 w-3" />
+                    <span>{participantCount} {participantCount === 1 ? 'member' : 'members'} ordering this</span>
+                  </div>
+                )}
               </div>
             </div>
             <button
@@ -335,6 +364,9 @@ function CartItemWithProgress({ item, groupProgress, onIncrement, onDecrement, o
             <div className="flex items-center gap-2 sm:gap-3">
               <span className="text-xs sm:text-sm text-gray-500 line-through">₹{item.retailPrice}</span>
               <span className="text-base sm:text-lg lg:text-xl font-bold text-green-600">₹{item.groupPrice}</span>
+              <span className="text-xs text-green-600 font-semibold">
+                {Math.round(((item.retailPrice - item.groupPrice) / item.retailPrice) * 100)}% OFF
+              </span>
             </div>
 
             {/* Quantity Controls */}
@@ -414,6 +446,55 @@ function GroupSelector({ userGroups, selectedGroup, setSelectedGroup, loadingGro
           </button>
         </div>
       )}
+    </div>
+  );
+}
+
+// Active Group Order Info
+function ActiveGroupOrderInfo({ activeGroupOrder, selectedGroup }) {
+  const totalParticipants = activeGroupOrder.totalParticipants || 0;
+  const paidCount = activeGroupOrder.participants?.filter(p => p.paymentStatus === 'paid').length || 0;
+  
+  return (
+    <div className="bg-gradient-to-br from-blue-50 to-cyan-50 rounded-xl sm:rounded-2xl shadow-lg p-4 sm:p-6 border-2 border-blue-200">
+      <h3 className="text-lg sm:text-xl font-bold mb-3 flex items-center gap-2 text-blue-900">
+        <SparklesIcon className="h-5 w-5 sm:h-6 sm:w-6" />
+        Current Group Order
+      </h3>
+      
+      <div className="space-y-3">
+        <div className="flex justify-between items-center">
+          <span className="text-sm text-gray-700">Total Participants:</span>
+          <span className="text-lg font-bold text-gray-900">{totalParticipants}</span>
+        </div>
+        
+        <div className="flex justify-between items-center">
+          <span className="text-sm text-gray-700">Payments Completed:</span>
+          <span className="text-lg font-bold text-green-600">{paidCount}/{totalParticipants}</span>
+        </div>
+        
+        <div className="flex justify-between items-center">
+          <span className="text-sm text-gray-700">Total Value:</span>
+          <span className="text-lg font-bold text-purple-600">₹{activeGroupOrder.totalAmount?.toLocaleString() || 0}</span>
+        </div>
+        
+        {activeGroupOrder.minQuantityMet ? (
+          <div className="mt-3 p-3 bg-green-100 rounded-lg border border-green-200">
+            <p className="text-sm text-green-800 font-semibold flex items-center gap-2">
+              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+              </svg>
+              All minimums met! Bulk pricing active.
+            </p>
+          </div>
+        ) : (
+          <div className="mt-3 p-3 bg-orange-100 rounded-lg border border-orange-200">
+            <p className="text-sm text-orange-800 font-semibold">
+              ⏳ More orders needed to unlock all bulk prices
+            </p>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
