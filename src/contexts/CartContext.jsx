@@ -1,4 +1,4 @@
-// src/contexts/CartContext.jsx - FIXED PERSISTENCE ISSUE
+// src/contexts/CartContext.jsx - FIXED INITIALIZATION
 import React, { createContext, useContext, useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { 
   doc, 
@@ -48,6 +48,7 @@ export function CartProvider({ children }) {
   const saveTimeoutRef = useRef(null);
   const isMountedRef = useRef(true);
   const unsubscribeRef = useRef(null);
+  const initTimeoutRef = useRef(null);
   const localStorageKey = 'groupbuy_cart';
 
   useEffect(() => {
@@ -59,93 +60,122 @@ export function CartProvider({ children }) {
       if (unsubscribeRef.current) {
         unsubscribeRef.current();
       }
+      if (initTimeoutRef.current) {
+        clearTimeout(initTimeoutRef.current);
+      }
     };
   }, []);
 
-  // Load cart from localStorage immediately (before Firestore)
+  // MAIN INITIALIZATION EFFECT
   useEffect(() => {
-    if (!currentUser) {
-      const localCart = localStorage.getItem(localStorageKey);
-      if (localCart) {
-        try {
-          const parsed = JSON.parse(localCart);
-          setCartItems(parsed);
-          console.log('📦 Cart loaded from localStorage:', parsed.length, 'items');
-        } catch (error) {
-          console.error('Error parsing localStorage cart:', error);
-        }
-      }
-      setLoading(false);
-      setInitialized(true);
-      return;
-    }
-
-    // For logged-in users, load from localStorage first (instant), then sync with Firestore
-    const localCart = localStorage.getItem(`${localStorageKey}_${currentUser.uid}`);
-    if (localCart) {
+    let mounted = true;
+    
+    const initializeCart = async () => {
       try {
-        const parsed = JSON.parse(localCart);
-        setCartItems(parsed);
-        console.log('📦 Cart loaded from localStorage (user):', parsed.length, 'items');
-      } catch (error) {
-        console.error('Error parsing localStorage cart:', error);
-      }
-    }
+        console.log('🔄 Initializing cart...');
+        setLoading(true);
 
-    // Then load from Firestore
-    loadFromFirestore();
-  }, [currentUser]);
-
-  const loadFromFirestore = async () => {
-    if (!currentUser) return;
-
-    try {
-      const cartRef = doc(db, 'carts', currentUser.uid);
-      
-      // Subscribe to real-time updates
-      unsubscribeRef.current = onSnapshot(
-        cartRef,
-        (snapshot) => {
-          if (isMountedRef.current) {
-            if (snapshot.exists()) {
-              const data = snapshot.data();
-              const items = data.items || [];
-              
-              // Only update if different from current state
-              if (JSON.stringify(items) !== JSON.stringify(cartItems)) {
-                setCartItems(items);
-                // Also update localStorage
-                saveToLocalStorage(items);
-                console.log('📥 Cart synced from Firestore:', items.length, 'items');
-              }
+        // Load from localStorage immediately
+        const localKey = currentUser 
+          ? `${localStorageKey}_${currentUser.uid}` 
+          : localStorageKey;
+        
+        const localCart = localStorage.getItem(localKey);
+        if (localCart) {
+          try {
+            const parsed = JSON.parse(localCart);
+            if (mounted) {
+              setCartItems(parsed);
+              console.log('📦 Cart loaded from localStorage:', parsed.length, 'items');
             }
-            setLoading(false);
-            setInitialized(true);
-          }
-        },
-        (error) => {
-          console.error('❌ Cart subscription error:', error);
-          if (isMountedRef.current) {
-            setLoading(false);
-            setInitialized(true);
+          } catch (error) {
+            console.error('Error parsing localStorage cart:', error);
           }
         }
-      );
-    } catch (error) {
-      console.error('Error loading from Firestore:', error);
-      setLoading(false);
-      setInitialized(true);
-    }
-  };
+
+        // Set initialization timeout (3 seconds max)
+        initTimeoutRef.current = setTimeout(() => {
+          if (mounted && !initialized) {
+            console.log('⏰ Cart initialization timeout - forcing completion');
+            setLoading(false);
+            setInitialized(true);
+          }
+        }, 3000);
+
+        // For logged-in users, sync with Firestore
+        if (currentUser) {
+          const cartRef = doc(db, 'carts', currentUser.uid);
+          
+          // Try to get cart once
+          try {
+            const cartDoc = await getDoc(cartRef);
+            if (cartDoc.exists() && mounted) {
+              const data = cartDoc.data();
+              const items = data.items || [];
+              setCartItems(items);
+              saveToLocalStorage(items);
+              console.log('📥 Cart synced from Firestore:', items.length, 'items');
+            }
+          } catch (error) {
+            console.error('Error loading from Firestore:', error);
+          }
+
+          // Subscribe to real-time updates
+          unsubscribeRef.current = onSnapshot(
+            cartRef,
+            (snapshot) => {
+              if (mounted) {
+                if (snapshot.exists()) {
+                  const data = snapshot.data();
+                  const items = data.items || [];
+                  
+                  // Only update if different
+                  setCartItems(prevItems => {
+                    if (JSON.stringify(items) !== JSON.stringify(prevItems)) {
+                      saveToLocalStorage(items);
+                      console.log('🔄 Cart updated from Firestore');
+                      return items;
+                    }
+                    return prevItems;
+                  });
+                }
+              }
+            },
+            (error) => {
+              console.error('❌ Cart subscription error:', error);
+            }
+          );
+        }
+
+        // Mark as initialized
+        if (mounted) {
+          setLoading(false);
+          setInitialized(true);
+          console.log('✅ Cart initialized successfully');
+        }
+      } catch (error) {
+        console.error('Error initializing cart:', error);
+        if (mounted) {
+          setLoading(false);
+          setInitialized(true);
+        }
+      }
+    };
+
+    initializeCart();
+
+    return () => {
+      mounted = false;
+    };
+  }, [currentUser]);
 
   // Save to localStorage immediately (synchronous)
   const saveToLocalStorage = useCallback((items) => {
     try {
-      if (currentUser) {
-        localStorage.setItem(`${localStorageKey}_${currentUser.uid}`, JSON.stringify(items));
-      } else {
-        localStorage.setItem(localStorageKey, JSON.stringify(items));
-      }
+      const key = currentUser 
+        ? `${localStorageKey}_${currentUser.uid}` 
+        : localStorageKey;
+      localStorage.setItem(key, JSON.stringify(items));
       console.log('💾 Cart saved to localStorage');
     } catch (error) {
       console.error('Error saving to localStorage:', error);
@@ -265,11 +295,10 @@ export function CartProvider({ children }) {
       setCartItems([]);
       
       // Clear from localStorage
-      if (currentUser) {
-        localStorage.removeItem(`${localStorageKey}_${currentUser.uid}`);
-      } else {
-        localStorage.removeItem(localStorageKey);
-      }
+      const key = currentUser 
+        ? `${localStorageKey}_${currentUser.uid}` 
+        : localStorageKey;
+      localStorage.removeItem(key);
 
       // Clear from Firestore
       if (currentUser) {
@@ -350,10 +379,10 @@ export function CartProvider({ children }) {
     calculations
   ]);
 
-  // Don't render children until cart is initialized
-  if (!initialized) {
+  // Show loading screen ONLY initially
+  if (loading && !initialized) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-50 to-green-50">
         <div className="text-center">
           <div className="h-12 w-12 animate-spin rounded-full border-4 border-gray-300 border-t-green-600 mx-auto mb-4"></div>
           <p className="text-gray-600">Loading cart...</p>

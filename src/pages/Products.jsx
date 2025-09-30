@@ -1,4 +1,4 @@
-// src/pages/Products.jsx - GROUP-CONTEXT SHOPPING WITH TIMER
+// src/pages/Products.jsx - OPTIMIZED WITH MINIMUM STATUS
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { productService, orderService, groupService } from '../services/groupService';
@@ -8,7 +8,7 @@ import LoadingSpinner from '../components/LoadingSpinner';
 import { 
   ShoppingCartIcon, MagnifyingGlassIcon, ClockIcon, 
   UsersIcon, CheckCircleIcon, ExclamationTriangleIcon,
-  SparklesIcon, LockClosedIcon, FireIcon
+  SparklesIcon, LockClosedIcon, FireIcon, BoltIcon
 } from '@heroicons/react/24/outline';
 import toast from 'react-hot-toast';
 
@@ -20,7 +20,6 @@ export default function Products() {
   const [loading, setLoading] = useState(true);
   const [sortBy, setSortBy] = useState('featured');
   
-  // Group context
   const [userGroups, setUserGroups] = useState([]);
   const [selectedGroup, setSelectedGroup] = useState(null);
   const [activeOrderCycle, setActiveOrderCycle] = useState(null);
@@ -37,25 +36,17 @@ export default function Products() {
   }, [selectedCategory, sortBy, currentUser]);
 
   useEffect(() => {
-    if (selectedGroup) {
-      fetchActiveOrderCycle();
-    }
+    if (selectedGroup) fetchActiveOrderCycle();
   }, [selectedGroup]);
 
-  // Timer countdown
   useEffect(() => {
     if (!activeOrderCycle) return;
-
-    const interval = setInterval(() => {
-      updateTimeRemaining();
-    }, 1000);
-
+    const interval = setInterval(() => updateTimeRemaining(), 1000);
     return () => clearInterval(interval);
   }, [activeOrderCycle]);
 
   const updateTimeRemaining = () => {
     if (!activeOrderCycle) return;
-
     const now = Date.now();
     let targetTime;
 
@@ -69,10 +60,8 @@ export default function Products() {
     }
 
     const remaining = targetTime - now;
-
     if (remaining <= 0) {
       setTimeRemaining(null);
-      // Refresh cycle data
       fetchActiveOrderCycle();
     } else {
       const hours = Math.floor(remaining / (1000 * 60 * 60));
@@ -84,7 +73,6 @@ export default function Products() {
 
   const fetchUserGroups = async () => {
     if (!currentUser) {
-      // Redirect to groups page to join a group first
       toast('Please join a group to start shopping', { icon: '👥' });
       navigate('/groups');
       return;
@@ -92,18 +80,13 @@ export default function Products() {
     
     try {
       const groups = await groupService.getUserGroups(currentUser.uid);
-      
       if (groups.length === 0) {
         toast.error('You need to join a group first to shop together');
         navigate('/groups');
         return;
       }
-      
       setUserGroups(groups);
-      
-      if (groups.length === 1) {
-        setSelectedGroup(groups[0]);
-      } else if (!selectedGroup) {
+      if (groups.length === 1 || !selectedGroup) {
         setSelectedGroup(groups[0]);
       }
     } catch (error) {
@@ -114,19 +97,13 @@ export default function Products() {
 
   const fetchActiveOrderCycle = async () => {
     if (!selectedGroup) return;
-    
     try {
       const cycles = await orderService.getActiveOrderCycles(selectedGroup.id);
-      
       if (cycles.length > 0) {
         setActiveOrderCycle(cycles[0]);
-        
-        // Subscribe to real-time updates
-        const unsubscribe = orderService.subscribeToOrderCycle(cycles[0].id, (data) => {
+        orderService.subscribeToOrderCycle(cycles[0].id, (data) => {
           setActiveOrderCycle(data);
         });
-        
-        return unsubscribe;
       } else {
         setActiveOrderCycle(null);
       }
@@ -175,47 +152,42 @@ export default function Products() {
   );
 
   const cartCount = getCartCount();
-
-  // Get product progress from cycle
   const getProductProgress = (productId) => {
     if (!activeOrderCycle || !activeOrderCycle.productOrders) return null;
     return activeOrderCycle.productOrders[productId] || null;
   };
 
-  // Can add to cart?
   const canAddToCart = () => {
-    if (!activeOrderCycle) return true; // Will create new cycle
+    if (!activeOrderCycle) return true;
     return activeOrderCycle.phase === 'collecting';
   };
 
-  // Phase message
   const getPhaseMessage = () => {
     if (!activeOrderCycle) {
-      return { text: 'Start shopping to begin a new order cycle', type: 'info' };
+      return { text: 'Start shopping to begin a new order cycle', type: 'info', icon: SparklesIcon };
     }
-
     if (activeOrderCycle.phase === 'collecting') {
       return { 
-        text: `Collecting orders - ${timeRemaining ? `${timeRemaining.hours}h ${timeRemaining.minutes}m ${timeRemaining.seconds}s remaining` : 'Processing...'}`,
-        type: 'collecting'
+        text: `Collecting orders - ${timeRemaining ? `${timeRemaining.hours}h ${timeRemaining.minutes}m ${timeRemaining.seconds}s` : ''}`,
+        type: 'collecting',
+        icon: ClockIcon
       };
     }
-
     if (activeOrderCycle.phase === 'payment_window') {
       return { 
-        text: `Payment window open - ${timeRemaining ? `${timeRemaining.hours}h ${timeRemaining.minutes}m ${timeRemaining.seconds}s to pay` : 'Processing...'}`,
-        type: 'payment'
+        text: `Payment window - ${timeRemaining ? `${timeRemaining.hours}h ${timeRemaining.minutes}m` : ''} to pay`,
+        type: 'payment',
+        icon: FireIcon
       };
     }
-
     if (activeOrderCycle.phase === 'confirmed') {
-      return { text: 'Order confirmed - Delivering tomorrow!', type: 'success' };
+      return { text: 'Order confirmed - Delivering tomorrow!', type: 'success', icon: CheckCircleIcon };
     }
-
-    return { text: 'Order in progress', type: 'info' };
+    return { text: 'Order in progress', type: 'info', icon: SparklesIcon };
   };
 
   const phaseMessage = getPhaseMessage();
+  const PhaseIcon = phaseMessage.icon;
 
   if (!selectedGroup) {
     return (
@@ -230,7 +202,7 @@ export default function Products() {
       {/* Sticky Header */}
       <div className="sticky top-14 sm:top-16 z-40 bg-white shadow-md">
         <div className="max-w-7xl mx-auto px-4 py-4">
-          {/* Group Selector & Phase Status */}
+          {/* Group & Phase Status */}
           <div className="mb-4">
             <div className="flex items-center justify-between gap-4 mb-3">
               <div className="flex-1">
@@ -265,14 +237,38 @@ export default function Products() {
               </button>
             </div>
 
-            {/* Phase Status Banner */}
-            <PhaseStatusBanner 
-              phase={activeOrderCycle?.phase}
-              message={phaseMessage}
-              timeRemaining={timeRemaining}
-              participantCount={activeOrderCycle?.totalParticipants || 0}
-              totalAmount={activeOrderCycle?.totalAmount || 0}
-            />
+            {/* Phase Status */}
+            <div className={`p-3 rounded-xl flex items-center gap-3 ${
+              phaseMessage.type === 'collecting' ? 'bg-blue-50 border border-blue-200' :
+              phaseMessage.type === 'payment' ? 'bg-orange-50 border border-orange-200' :
+              phaseMessage.type === 'success' ? 'bg-green-50 border border-green-200' :
+              'bg-gray-50 border border-gray-200'
+            }`}>
+              <PhaseIcon className={`h-5 w-5 ${
+                phaseMessage.type === 'collecting' ? 'text-blue-600' :
+                phaseMessage.type === 'payment' ? 'text-orange-600' :
+                phaseMessage.type === 'success' ? 'text-green-600' :
+                'text-gray-600'
+              }`} />
+              <div className="flex-1">
+                <p className="text-sm font-semibold">{phaseMessage.text}</p>
+                {activeOrderCycle && (
+                  <p className="text-xs text-gray-600">
+                    {activeOrderCycle.totalParticipants} participants • ₹{activeOrderCycle.totalAmount?.toLocaleString()}
+                  </p>
+                )}
+              </div>
+              {timeRemaining && (
+                <div className="flex gap-1">
+                  <div className="bg-white px-2 py-1 rounded text-xs font-bold">
+                    {String(timeRemaining.hours).padStart(2, '0')}h
+                  </div>
+                  <div className="bg-white px-2 py-1 rounded text-xs font-bold">
+                    {String(timeRemaining.minutes).padStart(2, '0')}m
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Search and Filters */}
@@ -287,7 +283,6 @@ export default function Products() {
                 onChange={(e) => setSearchTerm(e.target.value)}
               />
             </div>
-
             <select
               className="px-3 py-2 border-2 border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 appearance-none bg-white cursor-pointer"
               value={sortBy}
@@ -303,7 +298,7 @@ export default function Products() {
       </div>
 
       <div className="max-w-7xl mx-auto px-4 py-6">
-        {/* Category Filters */}
+        {/* Categories */}
         <div className="mb-6">
           <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
             <button
@@ -361,61 +356,7 @@ export default function Products() {
   );
 }
 
-// Phase Status Banner
-function PhaseStatusBanner({ phase, message, timeRemaining, participantCount, totalAmount }) {
-  const getStatusColor = () => {
-    if (message.type === 'collecting') return 'from-blue-500 to-cyan-600';
-    if (message.type === 'payment') return 'from-orange-500 to-red-600';
-    if (message.type === 'success') return 'from-green-500 to-emerald-600';
-    return 'from-gray-500 to-gray-600';
-  };
-
-  const getIcon = () => {
-    if (message.type === 'collecting') return <ClockIcon className="h-6 w-6" />;
-    if (message.type === 'payment') return <FireIcon className="h-6 w-6" />;
-    if (message.type === 'success') return <CheckCircleIcon className="h-6 w-6" />;
-    return <SparklesIcon className="h-6 w-6" />;
-  };
-
-  return (
-    <div className={`bg-gradient-to-r ${getStatusColor()} text-white rounded-xl p-4`}>
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          {getIcon()}
-          <div>
-            <p className="font-bold text-lg">{message.text}</p>
-            {participantCount > 0 && (
-              <p className="text-sm opacity-90">
-                {participantCount} members • ₹{totalAmount.toLocaleString()}
-              </p>
-            )}
-          </div>
-        </div>
-        
-        {timeRemaining && (
-          <div className="flex gap-2">
-            <TimeUnit value={timeRemaining.hours} label="H" />
-            <TimeUnit value={timeRemaining.minutes} label="M" />
-            <TimeUnit value={timeRemaining.seconds} label="S" />
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function TimeUnit({ value, label }) {
-  return (
-    <div className="text-center">
-      <div className="bg-white/20 rounded-lg px-2 py-1 min-w-[40px]">
-        <span className="text-xl font-bold">{String(value).padStart(2, '0')}</span>
-      </div>
-      <span className="text-xs opacity-75">{label}</span>
-    </div>
-  );
-}
-
-// Product Card
+// Enhanced Product Card
 function ProductCard({ product, cycleProgress, canAddToCart, phase }) {
   const { addToCart, isInCart, getItemQuantity, incrementQuantity, decrementQuantity } = useCart();
   
@@ -427,7 +368,6 @@ function ProductCard({ product, cycleProgress, canAddToCart, phase }) {
   const progress = Math.min((currentQty / minQty) * 100, 100);
   const isMet = currentQty >= minQty;
   const membersOrdering = cycleProgress?.participants?.length || 0;
-
   const discount = Math.round(((product.retailPrice - product.groupPrice) / product.retailPrice) * 100);
 
   const handleAddToCart = async () => {
@@ -462,25 +402,39 @@ function ProductCard({ product, cycleProgress, canAddToCart, phase }) {
           </div>
         )}
 
-        {/* Group Progress */}
+        {/* Minimum Status Badge */}
+        {cycleProgress && (
+          <div className="absolute top-2 right-2">
+            {isMet ? (
+              <div className="px-2 py-1 bg-green-500 text-white rounded-full text-xs font-bold flex items-center gap-1">
+                <CheckCircleIcon className="h-3 w-3" />
+                <span className="hidden sm:inline">Min Met</span>
+              </div>
+            ) : (
+              <div className="px-2 py-1 bg-orange-500 text-white rounded-full text-xs font-bold">
+                {minQty - currentQty} more
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Progress Bar */}
         {membersOrdering > 0 && cycleProgress && (
-          <div className="absolute bottom-2 left-2 right-2">
-            <div className="bg-white/95 backdrop-blur-sm rounded-lg p-2 shadow-lg">
-              <div className="flex items-center justify-between text-xs mb-1">
-                <span className="font-semibold flex items-center gap-1">
-                  <UsersIcon className="h-3 w-3" />
-                  {membersOrdering}
-                </span>
-                <span className={`font-bold ${isMet ? 'text-green-600' : 'text-orange-600'}`}>
-                  {currentQty}/{minQty}
-                </span>
-              </div>
-              <div className="w-full bg-gray-200 rounded-full h-1.5">
-                <div 
-                  className={`h-full rounded-full ${isMet ? 'bg-green-600' : 'bg-orange-500'}`}
-                  style={{ width: `${progress}%` }}
-                />
-              </div>
+          <div className="absolute bottom-0 left-0 right-0 bg-white/95 backdrop-blur-sm p-2">
+            <div className="flex items-center justify-between text-xs mb-1">
+              <span className="font-semibold flex items-center gap-1">
+                <UsersIcon className="h-3 w-3" />
+                {membersOrdering}
+              </span>
+              <span className={`font-bold ${isMet ? 'text-green-600' : 'text-orange-600'}`}>
+                {currentQty}/{minQty}
+              </span>
+            </div>
+            <div className="w-full bg-gray-200 rounded-full h-1.5">
+              <div 
+                className={`h-full rounded-full transition-all duration-500 ${isMet ? 'bg-green-600' : 'bg-orange-500'}`}
+                style={{ width: `${progress}%` }}
+              />
             </div>
           </div>
         )}
@@ -498,9 +452,8 @@ function ProductCard({ product, cycleProgress, canAddToCart, phase }) {
             <span className="text-gray-500">Retail:</span>
             <span className="text-red-600 line-through">₹{product.retailPrice}</span>
           </div>
-          
           <div className="flex justify-between items-center">
-            <span className="text-xs sm:text-sm font-semibold">Group Price:</span>
+            <span className="text-xs sm:text-sm font-semibold">Group:</span>
             <span className="text-lg sm:text-xl text-green-600 font-bold">₹{product.groupPrice}</span>
           </div>
         </div>
@@ -526,9 +479,10 @@ function ProductCard({ product, cycleProgress, canAddToCart, phase }) {
           ) : (
             <button
               onClick={handleAddToCart}
-              className="w-full py-2 sm:py-3 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-lg sm:rounded-xl font-bold hover:shadow-lg transition text-sm sm:text-base"
+              className="w-full py-2 sm:py-3 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-lg sm:rounded-xl font-bold hover:shadow-lg transition text-sm sm:text-base flex items-center justify-center gap-2"
             >
-              Add to Cart
+              <BoltIcon className="h-4 w-4" />
+              <span>Add</span>
             </button>
           )
         ) : (

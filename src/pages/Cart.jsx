@@ -1,4 +1,4 @@
-// src/pages/Cart.jsx - WITH TIMER & PAYMENT TRACKING
+// src/pages/Cart.jsx - PAYMENT ONLY WHEN MINIMUMS MET
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
@@ -7,8 +7,8 @@ import { groupService, orderService } from '../services/groupService';
 import { paymentService } from '../services/paymentService';
 import { 
   TrashIcon, ClockIcon, UsersIcon, CheckCircleIcon, 
-  ExclamationTriangleIcon, FireIcon, LockClosedIcon, SparklesIcon,
-  ShoppingBagIcon
+  ExclamationTriangleIcon, FireIcon, SparklesIcon,
+  ShoppingBagIcon, BoltIcon, CreditCardIcon
 } from '@heroicons/react/24/outline';
 import toast from 'react-hot-toast';
 
@@ -18,16 +18,12 @@ export default function Cart() {
   const [activeOrderCycle, setActiveOrderCycle] = useState(null);
   const [timeRemaining, setTimeRemaining] = useState(null);
   const [processingOrder, setProcessingOrder] = useState(false);
+  const [processingPayment, setProcessingPayment] = useState(false);
   
   const { currentUser, userProfile } = useAuth();
   const { 
-    cartItems, 
-    updateQuantity, 
-    removeFromCart, 
-    getCartTotal, 
-    clearCart,
-    incrementQuantity, 
-    decrementQuantity 
+    cartItems, removeFromCart, getCartTotal, clearCart,
+    incrementQuantity, decrementQuantity 
   } = useCart();
   const navigate = useNavigate();
 
@@ -36,25 +32,17 @@ export default function Cart() {
   }, [currentUser]);
 
   useEffect(() => {
-    if (selectedGroup) {
-      fetchActiveOrderCycle();
-    }
+    if (selectedGroup) fetchActiveOrderCycle();
   }, [selectedGroup]);
 
-  // Timer
   useEffect(() => {
     if (!activeOrderCycle) return;
-
-    const interval = setInterval(() => {
-      updateTimer();
-    }, 1000);
-
+    const interval = setInterval(() => updateTimer(), 1000);
     return () => clearInterval(interval);
   }, [activeOrderCycle]);
 
   const updateTimer = () => {
     if (!activeOrderCycle) return;
-
     const now = Date.now();
     let targetTime;
 
@@ -68,7 +56,6 @@ export default function Cart() {
     }
 
     const remaining = targetTime - now;
-
     if (remaining <= 0) {
       setTimeRemaining(null);
       fetchActiveOrderCycle();
@@ -82,14 +69,10 @@ export default function Cart() {
 
   const fetchUserGroups = async () => {
     if (!currentUser) return;
-
     try {
       const groups = await groupService.getUserGroups(currentUser.uid);
       setUserGroups(groups);
-      
-      if (groups.length === 1) {
-        setSelectedGroup(groups[0]);
-      }
+      if (groups.length === 1) setSelectedGroup(groups[0]);
     } catch (error) {
       console.error('Error fetching groups:', error);
     }
@@ -97,14 +80,10 @@ export default function Cart() {
 
   const fetchActiveOrderCycle = async () => {
     if (!selectedGroup) return;
-
     try {
       const cycles = await orderService.getActiveOrderCycles(selectedGroup.id);
-      
       if (cycles.length > 0) {
         setActiveOrderCycle(cycles[0]);
-        
-        // Subscribe to updates
         orderService.subscribeToOrderCycle(cycles[0].id, (data) => {
           setActiveOrderCycle(data);
         });
@@ -116,18 +95,30 @@ export default function Cart() {
     }
   };
 
+  // Check if ALL minimums are met across the entire cycle
+  const checkAllMinimumsMet = () => {
+    if (!activeOrderCycle || !activeOrderCycle.productOrders) return false;
+    
+    const productOrders = Object.values(activeOrderCycle.productOrders);
+    if (productOrders.length === 0) return false;
+    
+    // ALL products must meet minimum
+    return productOrders.every(p => p.quantity >= p.minQuantity);
+  };
+
+  const getUserParticipant = () => {
+    return activeOrderCycle?.participants?.find(p => p.userId === currentUser.uid);
+  };
+
   const handlePlaceOrder = async () => {
     if (cartItems.length === 0) {
       toast.error('Your cart is empty');
       return;
     }
-
     if (!selectedGroup) {
       toast.error('Please select a group');
       return;
     }
-
-    // Validate profile
     if (!userProfile?.name || !userProfile?.email || !userProfile?.phone) {
       toast.error('Please complete your profile first');
       setTimeout(() => navigate('/profile'), 2000);
@@ -135,12 +126,8 @@ export default function Cart() {
     }
 
     setProcessingOrder(true);
-
     try {
-      // Get or create order cycle
       const cycleId = await orderService.getOrCreateOrderCycle(selectedGroup.id);
-
-      // Add order to cycle
       await orderService.addOrderToCycle(cycleId, {
         userId: currentUser.uid,
         userName: userProfile.name,
@@ -159,13 +146,7 @@ export default function Cart() {
 
       toast.success('Order added to group cycle! 🎉');
       await clearCart();
-      
-      // Refresh cycle
       await fetchActiveOrderCycle();
-      
-      // Navigate to group detail to see progress
-      navigate(`/groups/${selectedGroup.id}`);
-
     } catch (error) {
       console.error('Error placing order:', error);
       toast.error(error.message || 'Failed to place order');
@@ -175,24 +156,19 @@ export default function Cart() {
   };
 
   const handlePayNow = async () => {
-    if (!activeOrderCycle) return;
-
-    const userParticipant = activeOrderCycle.participants?.find(
-      p => p.userId === currentUser.uid
-    );
-
+    const userParticipant = getUserParticipant();
     if (!userParticipant) {
       toast.error('Your order not found in this cycle');
       return;
     }
-
     if (userParticipant.paymentStatus === 'paid') {
       toast.success('You have already paid!');
       return;
     }
 
+    setProcessingPayment(true);
     try {
-      const paymentData = {
+      await paymentService.initiatePayment({
         orderId: activeOrderCycle.id,
         groupOrderId: activeOrderCycle.id,
         groupId: selectedGroup.id,
@@ -201,16 +177,12 @@ export default function Cart() {
         userEmail: userProfile.email,
         userPhone: userProfile.phone,
         amount: userParticipant.totalAmount
-      };
-
-      const result = await paymentService.initiatePayment(paymentData);
-
-      if (result.success) {
-        console.log('Payment initiated');
-      }
+      });
     } catch (error) {
       console.error('Payment error:', error);
       toast.error('Payment failed');
+    } finally {
+      setProcessingPayment(false);
     }
   };
 
@@ -219,15 +191,16 @@ export default function Cart() {
     return getCartTotal() + DELIVERY_FEE;
   };
 
-  const userParticipant = activeOrderCycle?.participants?.find(
-    p => p.userId === currentUser.uid
-  );
-
+  const userParticipant = getUserParticipant();
   const isInCollectingPhase = activeOrderCycle?.phase === 'collecting';
   const isInPaymentWindow = activeOrderCycle?.phase === 'payment_window';
+  const allMinimumsMet = checkAllMinimumsMet();
   const canPlaceOrder = !activeOrderCycle || isInCollectingPhase;
-  const canPayNow = isInPaymentWindow && userParticipant && userParticipant.paymentStatus !== 'paid';
+  const canShowPayment = isInPaymentWindow && userParticipant && userParticipant.paymentStatus !== 'paid' && allMinimumsMet;
+  const isPaid = userParticipant?.paymentStatus === 'paid';
+  const isWaitingForPaymentWindow = isInCollectingPhase && allMinimumsMet && userParticipant;
 
+  // Empty cart
   if (cartItems.length === 0 && !activeOrderCycle) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-gray-50 to-green-50 px-4 py-8">
@@ -251,7 +224,6 @@ export default function Cart() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-green-50 px-4 py-8">
       <div className="max-w-7xl mx-auto">
-        {/* Header */}
         <div className="mb-6">
           <h1 className="text-3xl sm:text-4xl font-bold text-gray-800 mb-2">Shopping Cart</h1>
           <p className="text-gray-600">
@@ -265,7 +237,60 @@ export default function Cart() {
             cycle={activeOrderCycle}
             timeRemaining={timeRemaining}
             userParticipant={userParticipant}
+            allMinimumsMet={allMinimumsMet}
           />
+        )}
+
+        {/* Minimums Not Met Warning */}
+        {activeOrderCycle && isInCollectingPhase && !allMinimumsMet && (
+          <div className="mb-6 p-4 bg-orange-50 border-2 border-orange-300 rounded-xl">
+            <div className="flex items-start gap-3">
+              <ExclamationTriangleIcon className="h-6 w-6 text-orange-600 flex-shrink-0 mt-0.5" />
+              <div>
+                <h3 className="font-bold text-orange-900 mb-1">⚠️ Waiting for Minimum Quantities</h3>
+                <p className="text-sm text-orange-800">
+                  Some products haven't reached minimum quantities yet. You can only pay when ALL minimums are met.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Ready to Pay - Waiting for Window */}
+        {isWaitingForPaymentWindow && (
+          <div className="mb-6 p-6 bg-gradient-to-r from-green-500 to-emerald-600 text-white rounded-2xl shadow-xl">
+            <div className="flex items-center gap-4">
+              <div className="w-16 h-16 bg-white/20 rounded-full flex items-center justify-center">
+                <CheckCircleIcon className="h-10 w-10" />
+              </div>
+              <div>
+                <h3 className="text-2xl font-bold mb-1">✅ All Minimums Met!</h3>
+                <p className="text-green-50">
+                  Great news! Payment window will open soon. Get ready to complete your payment!
+                </p>
+                {timeRemaining && (
+                  <p className="text-white/90 text-sm mt-1">
+                    Payment opens in: {timeRemaining.hours}h {timeRemaining.minutes}m {timeRemaining.seconds}s
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Payment Completed */}
+        {isPaid && (
+          <div className="mb-6 p-6 bg-gradient-to-r from-green-500 to-emerald-600 text-white rounded-2xl shadow-xl">
+            <div className="flex items-center gap-4">
+              <div className="w-16 h-16 bg-white/20 rounded-full flex items-center justify-center">
+                <CheckCircleIcon className="h-10 w-10" />
+              </div>
+              <div>
+                <h3 className="text-2xl font-bold mb-1">✅ Payment Complete!</h3>
+                <p className="text-green-50">Your order is confirmed. Delivery expected tomorrow!</p>
+              </div>
+            </div>
+          </div>
         )}
 
         <div className="grid lg:grid-cols-3 gap-6">
@@ -280,6 +305,7 @@ export default function Cart() {
                     onIncrement={() => incrementQuantity(item.id)}
                     onDecrement={() => decrementQuantity(item.id)}
                     onRemove={() => removeFromCart(item.id)}
+                    cycleProgress={activeOrderCycle?.productOrders?.[item.id]}
                   />
                 ))}
               </div>
@@ -308,15 +334,13 @@ export default function Cart() {
                   }}
                 >
                   {userGroups.map(group => (
-                    <option key={group.id} value={group.id}>
-                      {group.name}
-                    </option>
+                    <option key={group.id} value={group.id}>{group.name}</option>
                   ))}
                 </select>
               </div>
             )}
 
-            {/* Order Summary */}
+            {/* Place Order */}
             {canPlaceOrder && cartItems.length > 0 && (
               <OrderSummaryCard
                 cartTotal={getCartTotal()}
@@ -326,16 +350,31 @@ export default function Cart() {
               />
             )}
 
-            {/* Payment Button */}
-            {canPayNow && (
-              <PaymentCard
+            {/* PAYMENT - ONLY WHEN MINIMUMS MET */}
+            {canShowPayment && (
+              <FastPaymentCard
                 amount={userParticipant.totalAmount}
                 onPayNow={handlePayNow}
                 timeRemaining={timeRemaining}
+                processing={processingPayment}
               />
             )}
 
-            {/* Participants List */}
+            {/* Minimums Not Met - No Payment Option */}
+            {isInPaymentWindow && !allMinimumsMet && (
+              <div className="bg-red-50 border-2 border-red-300 rounded-2xl p-6">
+                <div className="flex items-center gap-3 mb-3">
+                  <ExclamationTriangleIcon className="h-8 w-8 text-red-600" />
+                  <h3 className="font-bold text-red-900">Payment Not Available</h3>
+                </div>
+                <p className="text-sm text-red-800">
+                  Some products didn't meet minimum quantities. Those items have been removed from the order. 
+                  Payment is not available.
+                </p>
+              </div>
+            )}
+
+            {/* Participants */}
             {activeOrderCycle && activeOrderCycle.participants?.length > 0 && (
               <ParticipantsCard participants={activeOrderCycle.participants} />
             )}
@@ -346,23 +385,39 @@ export default function Cart() {
   );
 }
 
-// Phase Status Card
-function PhaseStatusCard({ cycle, timeRemaining, userParticipant }) {
+// Components remain the same but updated...
+function PhaseStatusCard({ cycle, timeRemaining, userParticipant, allMinimumsMet }) {
   const getPhaseInfo = () => {
     if (cycle.phase === 'collecting') {
+      if (allMinimumsMet) {
+        return {
+          bg: 'from-green-500 to-emerald-600',
+          icon: <CheckCircleIcon className="h-8 w-8" />,
+          title: '✅ Ready - Wait for Payment Window',
+          desc: 'All minimums met! Payment window opens soon.'
+        };
+      }
       return {
         bg: 'from-blue-500 to-cyan-600',
         icon: <ClockIcon className="h-8 w-8" />,
         title: '⏱️ Collecting Orders',
-        desc: 'Add items to your cart. Order cycle closes when timer ends.'
+        desc: 'Waiting for all products to meet minimum quantities.'
       };
     }
     if (cycle.phase === 'payment_window') {
+      if (allMinimumsMet) {
+        return {
+          bg: 'from-orange-500 to-red-600',
+          icon: <FireIcon className="h-8 w-8" />,
+          title: '💳 Payment Window Open!',
+          desc: 'All minimums met. Complete payment now!'
+        };
+      }
       return {
-        bg: 'from-orange-500 to-red-600',
-        icon: <FireIcon className="h-8 w-8" />,
-        title: '💳 Payment Window Open!',
-        desc: 'Complete your payment before timer ends or your order will be cancelled.'
+        bg: 'from-red-600 to-red-700',
+        icon: <ExclamationTriangleIcon className="h-8 w-8" />,
+        title: '❌ Minimums Not Met',
+        desc: 'Some products removed. Payment not available.'
       };
     }
     if (cycle.phase === 'confirmed') {
@@ -370,7 +425,7 @@ function PhaseStatusCard({ cycle, timeRemaining, userParticipant }) {
         bg: 'from-green-500 to-emerald-600',
         icon: <CheckCircleIcon className="h-8 w-8" />,
         title: '✅ Order Confirmed',
-        desc: 'Your order is being prepared for delivery tomorrow!'
+        desc: 'Preparing for delivery tomorrow!'
       };
     }
     return {
@@ -413,9 +468,9 @@ function PhaseStatusCard({ cycle, timeRemaining, userParticipant }) {
           <p className="text-2xl font-bold">₹{cycle.totalAmount?.toLocaleString() || 0}</p>
         </div>
         <div>
-          <p className="text-white/80 text-xs mb-1">Your Status</p>
+          <p className="text-white/80 text-xs mb-1">Status</p>
           <p className="text-lg font-bold">
-            {userParticipant?.paymentStatus === 'paid' ? '✓ Paid' : '⏳ Pending'}
+            {allMinimumsMet ? '✓ Ready' : '⏳ Waiting'}
           </p>
         </div>
       </div>
@@ -434,8 +489,12 @@ function TimeUnit({ value, label }) {
   );
 }
 
-// Cart Item Card
-function CartItemCard({ item, onIncrement, onDecrement, onRemove }) {
+function CartItemCard({ item, onIncrement, onDecrement, onRemove, cycleProgress }) {
+  const currentQty = cycleProgress?.quantity || 0;
+  const minQty = item.minQuantity || 50;
+  const progress = Math.min((currentQty / minQty) * 100, 100);
+  const isMet = currentQty >= minQty;
+
   return (
     <div className="bg-white rounded-xl shadow-md p-4 sm:p-6">
       <div className="flex gap-4">
@@ -443,9 +502,7 @@ function CartItemCard({ item, onIncrement, onDecrement, onRemove }) {
           {item.imageUrl ? (
             <img src={item.imageUrl} alt={item.name} className="w-full h-full object-cover rounded-lg" />
           ) : (
-            <div className="w-full h-full flex items-center justify-center text-gray-400">
-              📦
-            </div>
+            <div className="w-full h-full flex items-center justify-center text-gray-400">📦</div>
           )}
         </div>
         
@@ -457,7 +514,24 @@ function CartItemCard({ item, onIncrement, onDecrement, onRemove }) {
             </button>
           </div>
 
-          <p className="text-green-600 font-bold text-xl mb-3">₹{item.groupPrice}</p>
+          <p className="text-green-600 font-bold text-xl mb-2">₹{item.groupPrice}</p>
+
+          {cycleProgress && (
+            <div className="mb-3">
+              <div className="flex justify-between text-xs mb-1">
+                <span className={isMet ? 'text-green-600 font-bold' : 'text-orange-600'}>
+                  {isMet ? '✓ Minimum Met!' : `Need ${minQty - currentQty} more`}
+                </span>
+                <span className="font-bold">{currentQty}/{minQty}</span>
+              </div>
+              <div className="w-full bg-gray-200 rounded-full h-2">
+                <div 
+                  className={`h-full rounded-full ${isMet ? 'bg-green-600' : 'bg-orange-500'}`}
+                  style={{ width: `${progress}%` }}
+                />
+              </div>
+            </div>
+          )}
 
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3 bg-gray-100 rounded-lg p-2">
@@ -469,7 +543,6 @@ function CartItemCard({ item, onIncrement, onDecrement, onRemove }) {
                 <span className="text-lg font-bold">+</span>
               </button>
             </div>
-
             <div className="text-right">
               <p className="text-sm text-gray-500">Total</p>
               <p className="text-xl font-bold">₹{item.groupPrice * item.quantity}</p>
@@ -481,12 +554,10 @@ function CartItemCard({ item, onIncrement, onDecrement, onRemove }) {
   );
 }
 
-// Your Order Card
 function YourOrderCard({ participant }) {
   return (
     <div className="bg-white rounded-2xl shadow-lg p-6">
       <h3 className="text-xl font-bold mb-4">Your Order</h3>
-      
       <div className="space-y-3 mb-4">
         {participant.items.map((item, idx) => (
           <div key={idx} className="flex justify-between p-3 bg-gray-50 rounded-lg">
@@ -498,7 +569,6 @@ function YourOrderCard({ participant }) {
           </div>
         ))}
       </div>
-
       <div className="border-t pt-3 flex justify-between font-bold text-lg">
         <span>Total:</span>
         <span className="text-green-600">₹{participant.totalAmount}</span>
@@ -507,12 +577,10 @@ function YourOrderCard({ participant }) {
   );
 }
 
-// Order Summary Card
 function OrderSummaryCard({ cartTotal, total, onPlaceOrder, processing }) {
   return (
     <div className="bg-white rounded-2xl shadow-lg p-6 sticky top-20">
       <h3 className="text-xl font-bold mb-4">Order Summary</h3>
-      
       <div className="space-y-3 mb-4">
         <div className="flex justify-between">
           <span className="text-gray-600">Subtotal:</span>
@@ -527,55 +595,77 @@ function OrderSummaryCard({ cartTotal, total, onPlaceOrder, processing }) {
           <span className="text-green-600">₹{total}</span>
         </div>
       </div>
-
       <button
         onClick={onPlaceOrder}
         disabled={processing}
-        className="w-full py-4 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-xl font-bold hover:shadow-lg transition disabled:opacity-50"
+        className="w-full py-4 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-xl font-bold hover:shadow-lg transition disabled:opacity-50 flex items-center justify-center gap-2"
       >
-        {processing ? 'Placing Order...' : 'Place Order'}
+        {processing ? (
+          <>
+            <div className="h-5 w-5 animate-spin rounded-full border-2 border-white border-t-transparent"></div>
+            <span>Placing...</span>
+          </>
+        ) : (
+          <>
+            <BoltIcon className="h-5 w-5" />
+            <span>Place Order</span>
+          </>
+        )}
       </button>
-
-      <p className="text-xs text-gray-500 mt-3 text-center">
-        Order will be added to group cycle
-      </p>
+      <p className="text-xs text-gray-500 mt-3 text-center">Order added to group cycle</p>
     </div>
   );
 }
 
-// Payment Card
-function PaymentCard({ amount, onPayNow, timeRemaining }) {
+function FastPaymentCard({ amount, onPayNow, timeRemaining, processing }) {
   return (
-    <div className="bg-gradient-to-br from-orange-50 to-red-50 border-2 border-orange-300 rounded-2xl p-6">
+    <div className="bg-gradient-to-br from-orange-50 to-red-50 border-2 border-orange-300 rounded-2xl p-6 shadow-xl">
       <div className="flex items-center gap-3 mb-4">
-        <FireIcon className="h-8 w-8 text-orange-600" />
+        <div className="w-12 h-12 bg-gradient-to-br from-orange-500 to-red-600 rounded-full flex items-center justify-center">
+          <FireIcon className="h-6 w-6 text-white" />
+        </div>
         <div>
-          <h3 className="font-bold text-lg">Complete Payment</h3>
+          <h3 className="font-bold text-lg">Fast Payment</h3>
           {timeRemaining && (
             <p className="text-sm text-orange-700">
-              {timeRemaining.hours}h {timeRemaining.minutes}m {timeRemaining.seconds}s left
+              {timeRemaining.hours}h {timeRemaining.minutes}m left
             </p>
           )}
         </div>
+      </div>
+
+      <div className="mb-4 p-2 bg-green-100 rounded-lg flex items-center gap-2">
+        <CheckCircleIcon className="h-4 w-4 text-green-600" />
+        <p className="text-xs text-green-800 font-semibold">✓ All minimums met - Pay now!</p>
       </div>
 
       <p className="text-3xl font-bold text-gray-900 mb-4">₹{amount}</p>
 
       <button
         onClick={onPayNow}
-        className="w-full py-4 bg-gradient-to-r from-orange-600 to-red-600 text-white rounded-xl font-bold hover:shadow-lg transition"
+        disabled={processing}
+        className="w-full py-4 bg-gradient-to-r from-orange-600 to-red-600 text-white rounded-xl font-bold hover:shadow-lg transition disabled:opacity-50 flex items-center justify-center gap-2"
       >
-        Pay Now
+        {processing ? (
+          <>
+            <div className="h-5 w-5 animate-spin rounded-full border-2 border-white border-t-transparent"></div>
+            <span>Processing...</span>
+          </>
+        ) : (
+          <>
+            <CreditCardIcon className="h-5 w-5" />
+            <span>Pay Now</span>
+          </>
+        )}
       </button>
 
       <p className="text-xs text-orange-700 mt-3 text-center font-medium">
-        ⚠️ Payment required or order will be cancelled
+        ⚠️ Complete payment or order will be cancelled
       </p>
     </div>
   );
 }
 
-// Participants Card
 function ParticipantsCard({ participants }) {
   return (
     <div className="bg-white rounded-2xl shadow-lg p-6">
@@ -583,7 +673,6 @@ function ParticipantsCard({ participants }) {
         <UsersIcon className="h-6 w-6 text-purple-600" />
         Participants ({participants.length})
       </h3>
-      
       <div className="space-y-2 max-h-96 overflow-y-auto">
         {participants.map((p, idx) => (
           <div key={idx} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">

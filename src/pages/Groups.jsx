@@ -1,18 +1,13 @@
-// src/pages/Groups.jsx - FIXED LOADING AND DISPLAY ISSUES
+// src/pages/Groups.jsx - OPTIMIZED WITH STATUS TRACKING
 import React, { useState, useEffect, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { groupService } from '../services/groupService';
+import { groupService, orderService } from '../services/groupService';
 import LoadingSpinner, { SkeletonLoader } from '../components/LoadingSpinner';
 import { 
-  PlusIcon, 
-  UserGroupIcon, 
-  MapPinIcon, 
-  CalendarIcon, 
-  UsersIcon, 
-  SparklesIcon,
-  ShoppingBagIcon,
-  ArrowRightIcon
+  PlusIcon, UserGroupIcon, MapPinIcon, CalendarIcon, UsersIcon, 
+  SparklesIcon, ShoppingBagIcon, ArrowRightIcon, CheckCircleIcon,
+  ClockIcon, FireIcon, BoltIcon, ExclamationTriangleIcon
 } from '@heroicons/react/24/outline';
 import toast from 'react-hot-toast';
 
@@ -25,12 +20,10 @@ export default function Groups() {
   const { currentUser, userProfile } = useAuth();
   const navigate = useNavigate();
   
-  // Refs to prevent duplicate operations
   const locationFetchedRef = useRef(false);
   const toastShownRef = useRef(false);
   const groupsFetchedRef = useRef(false);
 
-  // Get user location on mount
   useEffect(() => {
     if (!locationFetchedRef.current) {
       locationFetchedRef.current = true;
@@ -38,7 +31,6 @@ export default function Groups() {
     }
   }, []);
 
-  // Fetch groups when location is available
   useEffect(() => {
     if (userLocation && !groupsFetchedRef.current) {
       groupsFetchedRef.current = true;
@@ -59,36 +51,23 @@ export default function Groups() {
           setUserLocation(location);
           setLocationLoading(false);
           
-          // Show success toast only once
           if (!toastShownRef.current) {
             toastShownRef.current = true;
-            toast.success('Location detected!', { 
-              icon: '📍',
-              duration: 2000,
-              id: 'location-detected'
-            });
+            toast.success('Location detected!', { icon: '📍', duration: 2000, id: 'location-detected' });
           }
         },
         (error) => {
           console.error('Location error:', error);
-          const defaultLocation = { latitude: 19.0760, longitude: 72.8777 }; // Mumbai
+          const defaultLocation = { latitude: 19.0760, longitude: 72.8777 };
           setUserLocation(defaultLocation);
           setLocationLoading(false);
           
           if (!toastShownRef.current) {
             toastShownRef.current = true;
-            toast('Using default location: Mumbai', { 
-              icon: '📍',
-              duration: 2000,
-              id: 'location-default'
-            });
+            toast('Using default location: Mumbai', { icon: '📍', duration: 2000, id: 'location-default' });
           }
         },
-        {
-          timeout: 10000,
-          maximumAge: 60000,
-          enableHighAccuracy: false
-        }
+        { timeout: 10000, maximumAge: 60000, enableHighAccuracy: false }
       );
     } else {
       const defaultLocation = { latitude: 19.0760, longitude: 72.8777 };
@@ -97,43 +76,46 @@ export default function Groups() {
       
       if (!toastShownRef.current) {
         toastShownRef.current = true;
-        toast('Geolocation not supported', { 
-          icon: '📍',
-          duration: 2000,
-          id: 'location-unsupported'
-        });
+        toast('Geolocation not supported', { icon: '📍', duration: 2000, id: 'location-unsupported' });
       }
     }
   };
 
   const fetchGroups = async () => {
-    if (!userLocation) {
-      console.log('No location available');
-      return;
-    }
+    if (!userLocation) return;
 
     try {
       setLoading(true);
-      console.log('Fetching groups for location:', userLocation);
-      
       const groupsData = await groupService.getGroupsByLocation(
         userLocation.latitude,
         userLocation.longitude,
-        50 // 50km radius
+        50
       );
       
-      console.log('Groups fetched:', groupsData.length);
+      // Fetch active order cycles for each group
+      const groupsWithStatus = await Promise.all(
+        groupsData.map(async (group) => {
+          try {
+            const cycles = await orderService.getActiveOrderCycles(group.id);
+            return { 
+              ...group, 
+              activeCycle: cycles.length > 0 ? cycles[0] : null 
+            };
+          } catch (error) {
+            return { ...group, activeCycle: null };
+          }
+        })
+      );
       
-      // Remove duplicates
       const uniqueGroups = Array.from(
-        new Map(groupsData.map(group => [group.id, group])).values()
+        new Map(groupsWithStatus.map(group => [group.id, group])).values()
       );
       
       setGroups(uniqueGroups);
     } catch (error) {
       console.error('Error fetching groups:', error);
       toast.error('Failed to load groups');
-      setGroups([]); // Set empty array on error
+      setGroups([]);
     } finally {
       setLoading(false);
     }
@@ -143,8 +125,6 @@ export default function Groups() {
     try {
       await groupService.joinGroup(groupId, currentUser.uid);
       toast.success('Successfully joined group!', { icon: '🎉' });
-      
-      // Refresh groups
       groupsFetchedRef.current = false;
       await fetchGroups();
     } catch (error) {
@@ -159,15 +139,11 @@ export default function Groups() {
 
   const handleCreateSuccess = async () => {
     setShowCreateForm(false);
-    
-    // Reset and refresh groups
     groupsFetchedRef.current = false;
     await fetchGroups();
-    
     toast.success('Group created! Refreshing list...', { duration: 2000 });
   };
 
-  // Show location loading screen
   if (locationLoading) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-gray-50 to-green-50 px-4 py-8">
@@ -201,25 +177,11 @@ export default function Groups() {
 
         {/* Stats Cards */}
         {groups.length > 0 && (
-          <div className="grid md:grid-cols-3 gap-6 mb-8">
-            <StatsCard
-              icon={UserGroupIcon}
-              label="Total Groups"
-              value={groups.length}
-              color="green"
-            />
-            <StatsCard
-              icon={UsersIcon}
-              label="Total Members"
-              value={groups.reduce((sum, g) => sum + (g.members?.length || 0), 0)}
-              color="blue"
-            />
-            <StatsCard
-              icon={SparklesIcon}
-              label="Active Orders"
-              value={groups.reduce((sum, g) => sum + (g.currentOrders?.length || 0), 0)}
-              color="purple"
-            />
+          <div className="grid md:grid-cols-4 gap-6 mb-8">
+            <StatsCard icon={UserGroupIcon} label="Total Groups" value={groups.length} color="green" />
+            <StatsCard icon={UsersIcon} label="Total Members" value={groups.reduce((sum, g) => sum + (g.members?.length || 0), 0)} color="blue" />
+            <StatsCard icon={ShoppingBagIcon} label="Active Orders" value={groups.filter(g => g.activeCycle).length} color="purple" />
+            <StatsCard icon={BoltIcon} label="Ready to Pay" value={groups.filter(g => g.activeCycle?.phase === 'payment_window').length} color="orange" />
           </div>
         )}
 
@@ -257,12 +219,13 @@ export default function Groups() {
   );
 }
 
-// Stats Card Component
+// Stats Card
 function StatsCard({ icon: Icon, label, value, color }) {
   const colorClasses = {
     green: 'from-green-500 to-emerald-600',
     blue: 'from-blue-500 to-cyan-600',
-    purple: 'from-purple-500 to-pink-600'
+    purple: 'from-purple-500 to-pink-600',
+    orange: 'from-orange-500 to-red-600'
   };
 
   return (
@@ -276,12 +239,12 @@ function StatsCard({ icon: Icon, label, value, color }) {
   );
 }
 
-// Group Card Component
+// Enhanced Group Card with Status
 function GroupCard({ group, onJoin, onViewDetails, currentUserId }) {
   const [isJoining, setIsJoining] = useState(false);
   const isMember = group.members?.includes(currentUserId);
   const memberCount = group.members?.length || 0;
-  const activeOrders = group.currentOrders?.length || 0;
+  const activeCycle = group.activeCycle;
 
   const handleJoinClick = async (e) => {
     e.preventDefault();
@@ -299,6 +262,50 @@ function GroupCard({ group, onJoin, onViewDetails, currentUserId }) {
     onViewDetails(group.id);
   };
 
+  // Get cycle status
+  const getCycleStatus = () => {
+    if (!activeCycle) return null;
+    
+    const phase = activeCycle.phase;
+    const productOrders = activeCycle.productOrders || {};
+    const allMinimumsMet = Object.values(productOrders).every(p => p.quantity >= p.minQuantity);
+    
+    if (phase === 'collecting') {
+      if (allMinimumsMet) {
+        return {
+          text: '✅ Ready for Payment',
+          color: 'bg-green-500',
+          icon: CheckCircleIcon
+        };
+      }
+      return {
+        text: '⏱️ Collecting Orders',
+        color: 'bg-blue-500',
+        icon: ClockIcon
+      };
+    }
+    
+    if (phase === 'payment_window') {
+      return {
+        text: '💳 Payment Window Open',
+        color: 'bg-orange-500',
+        icon: FireIcon
+      };
+    }
+    
+    if (phase === 'confirmed') {
+      return {
+        text: '✓ Order Confirmed',
+        color: 'bg-green-500',
+        icon: CheckCircleIcon
+      };
+    }
+    
+    return null;
+  };
+
+  const status = getCycleStatus();
+
   return (
     <div className="group bg-white rounded-xl shadow-md hover:shadow-2xl transition-all duration-300 overflow-hidden transform hover:-translate-y-1">
       {/* Header */}
@@ -314,15 +321,23 @@ function GroupCard({ group, onJoin, onViewDetails, currentUserId }) {
               <UsersIcon className="h-4 w-4" />
               {memberCount} {memberCount === 1 ? 'member' : 'members'}
             </span>
-            {activeOrders > 0 && (
+            {activeCycle && (
               <span className="flex items-center gap-1">
                 <ShoppingBagIcon className="h-4 w-4" />
-                {activeOrders} active
+                {activeCycle.totalParticipants} active
               </span>
             )}
           </div>
         </div>
       </div>
+      
+      {/* Status Banner */}
+      {status && (
+        <div className={`${status.color} text-white px-4 py-2 flex items-center gap-2 text-sm font-bold`}>
+          <status.icon className="h-4 w-4" />
+          <span>{status.text}</span>
+        </div>
+      )}
       
       {/* Content */}
       <div className="p-6">
@@ -348,6 +363,20 @@ function GroupCard({ group, onJoin, onViewDetails, currentUserId }) {
             </div>
           )}
         </div>
+
+        {/* Cycle Info */}
+        {activeCycle && (
+          <div className="mb-4 p-3 bg-gray-50 rounded-lg">
+            <div className="flex justify-between text-sm mb-1">
+              <span className="text-gray-600">Total Value:</span>
+              <span className="font-bold text-gray-900">₹{activeCycle.totalAmount?.toLocaleString() || 0}</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-gray-600">Participants:</span>
+              <span className="font-bold text-gray-900">{activeCycle.totalParticipants || 0}</span>
+            </div>
+          </div>
+        )}
         
         {/* Actions */}
         <div className="flex gap-3">
@@ -376,9 +405,7 @@ function GroupCard({ group, onJoin, onViewDetails, currentUserId }) {
             </button>
           ) : (
             <div className="flex-1 px-4 py-3 bg-green-50 text-green-700 rounded-lg font-semibold flex items-center justify-center gap-2 border border-green-200">
-              <svg className="h-5 w-5" fill="currentColor" viewBox="0 0 20 20">
-                <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-              </svg>
+              <CheckCircleIcon className="h-5 w-5" />
               Joined
             </div>
           )}
@@ -388,7 +415,7 @@ function GroupCard({ group, onJoin, onViewDetails, currentUserId }) {
   );
 }
 
-// Empty State Component
+// Empty State
 function EmptyState({ onCreateClick }) {
   return (
     <div className="text-center py-16 bg-white rounded-2xl shadow-md">
@@ -410,7 +437,7 @@ function EmptyState({ onCreateClick }) {
   );
 }
 
-// Create Group Modal Component
+// Create Group Modal
 function CreateGroupModal({ onClose, onSuccess, userLocation }) {
   const [formData, setFormData] = useState({
     name: '',
@@ -424,23 +451,12 @@ function CreateGroupModal({ onClose, onSuccess, userLocation }) {
   const handleSubmit = async (e) => {
     e.preventDefault();
     
-    if (!formData.name.trim()) {
-      toast.error('Please enter a group name');
-      return;
-    }
-    
-    if (!formData.description.trim()) {
-      toast.error('Please enter a description');
-      return;
-    }
-    
-    if (!formData.area.trim()) {
-      toast.error('Please enter an area');
+    if (!formData.name.trim() || !formData.description.trim() || !formData.area.trim()) {
+      toast.error('Please fill all required fields');
       return;
     }
 
     setLoading(true);
-
     try {
       const groupId = await groupService.createGroup({
         ...formData,
@@ -450,10 +466,8 @@ function CreateGroupModal({ onClose, onSuccess, userLocation }) {
         maxMembers: 50
       });
       
-      console.log('✅ Group created successfully:', groupId);
+      console.log('✅ Group created:', groupId);
       toast.success('Group created successfully!', { icon: '🎉', duration: 3000 });
-      
-      // Call success callback
       onSuccess();
     } catch (error) {
       console.error('❌ Error creating group:', error);
@@ -473,9 +487,7 @@ function CreateGroupModal({ onClose, onSuccess, userLocation }) {
         
         <form onSubmit={handleSubmit} className="p-6 space-y-4">
           <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-2">
-              Group Name *
-            </label>
+            <label className="block text-sm font-semibold text-gray-700 mb-2">Group Name *</label>
             <input
               type="text"
               required
@@ -487,9 +499,7 @@ function CreateGroupModal({ onClose, onSuccess, userLocation }) {
           </div>
           
           <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-2">
-              Description *
-            </label>
+            <label className="block text-sm font-semibold text-gray-700 mb-2">Description *</label>
             <textarea
               required
               rows={3}
@@ -501,9 +511,7 @@ function CreateGroupModal({ onClose, onSuccess, userLocation }) {
           </div>
           
           <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-2">
-              Area/Neighborhood *
-            </label>
+            <label className="block text-sm font-semibold text-gray-700 mb-2">Area/Neighborhood *</label>
             <input
               type="text"
               required
@@ -515,9 +523,7 @@ function CreateGroupModal({ onClose, onSuccess, userLocation }) {
           </div>
           
           <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-2">
-              Category *
-            </label>
+            <label className="block text-sm font-semibold text-gray-700 mb-2">Category *</label>
             <select
               className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500 appearance-none bg-white transition cursor-pointer"
               value={formData.category}
@@ -563,7 +569,6 @@ function CreateGroupModal({ onClose, onSuccess, userLocation }) {
   );
 }
 
-// Helper function
 function getCategoryIcon(category) {
   const icons = {
     groceries: '🌾',
