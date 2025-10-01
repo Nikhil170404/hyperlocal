@@ -8,7 +8,7 @@ import LoadingSpinner from '../components/LoadingSpinner';
 import { 
   CheckCircleIcon, ClockIcon, CurrencyRupeeIcon, ShoppingBagIcon, TruckIcon,
   ExclamationCircleIcon, ArrowLeftIcon, CreditCardIcon, ChartBarIcon,
-  UsersIcon, SparklesIcon, PackageIcon, HomeIcon, XCircleIcon
+  UsersIcon, SparklesIcon, HomeIcon, XCircleIcon
 } from '@heroicons/react/24/outline';
 import toast from 'react-hot-toast';
 
