@@ -1,93 +1,126 @@
-// src/pages/GroupDetail.jsx - WITH ORDER CYCLE TRACKING
+// src/pages/GroupDetail.jsx - Enhanced with Order Cycles
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { doc, getDoc, onSnapshot } from 'firebase/firestore';
+import { db } from '../config/firebase';
 import { useAuth } from '../contexts/AuthContext';
-import { groupService, orderService } from '../services/groupService';
-import LoadingSpinner from '../components/LoadingSpinner';
+import { orderService } from '../services/groupService';
+import { paymentService } from '../services/paymentService';
+import RazorpayButton from '../components/RazorpayButton';
 import { 
-  UserGroupIcon, ShoppingBagIcon, ArrowLeftIcon, MapPinIcon,
-  UsersIcon, SparklesIcon, CheckCircleIcon, ClockIcon,
-  FireIcon, TruckIcon, ExclamationTriangleIcon
+  UserGroupIcon,
+  MapPinIcon,
+  UsersIcon,
+  ShoppingBagIcon,
+  ClockIcon,
+  CheckCircleIcon,
+  SparklesIcon,
+  ArrowLeftIcon,
+  CurrencyRupeeIcon,
+  TruckIcon,
+  XCircleIcon
 } from '@heroicons/react/24/outline';
+import { ProgressBar } from '../components/LoadingSpinner';
 import toast from 'react-hot-toast';
 
 export default function GroupDetail() {
   const { groupId } = useParams();
-  const [group, setGroup] = useState(null);
-  const [activeOrderCycle, setActiveOrderCycle] = useState(null);
-  const [timeRemaining, setTimeRemaining] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const { currentUser } = useAuth();
+  const { currentUser, userProfile } = useAuth();
   const navigate = useNavigate();
+  
+  const [group, setGroup] = useState(null);
+  const [orderCycle, setOrderCycle] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [timeRemaining, setTimeRemaining] = useState(null);
 
   useEffect(() => {
-    if (!groupId) {
-      toast.error('Invalid group ID');
-      navigate('/groups');
-      return;
+    if (groupId) {
+      fetchGroupDetails();
     }
-    
-    fetchGroupDetails();
-    fetchActiveOrderCycle();
   }, [groupId]);
 
-  // Timer
+  // Subscribe to order cycle updates
   useEffect(() => {
-    if (!activeOrderCycle) return;
+    if (!groupId || !group) return;
+
+    const unsubscribe = onSnapshot(
+      doc(db, 'groups', groupId),
+      async (groupDoc) => {
+        if (groupDoc.exists()) {
+          const groupData = groupDoc.data();
+          setGroup({ id: groupDoc.id, ...groupData });
+          
+          if (groupData.currentOrderCycle) {
+            const cycleDoc = await getDoc(doc(db, 'orderCycles', groupData.currentOrderCycle));
+            if (cycleDoc.exists()) {
+              setOrderCycle({ id: cycleDoc.id, ...cycleDoc.data() });
+            }
+          } else {
+            setOrderCycle(null);
+          }
+        }
+      }
+    );
+
+    return () => unsubscribe();
+  }, [groupId, group]);
+
+  // Update countdown timer
+  useEffect(() => {
+    if (!orderCycle) return;
 
     const interval = setInterval(() => {
-      updateTimer();
+      const now = Date.now();
+      let targetTime;
+
+      if (orderCycle.phase === 'collecting' && orderCycle.collectingEndsAt) {
+        targetTime = orderCycle.collectingEndsAt.toMillis();
+      } else if (orderCycle.phase === 'payment_window' && orderCycle.paymentWindowEndsAt) {
+        targetTime = orderCycle.paymentWindowEndsAt.toMillis();
+      }
+
+      if (targetTime) {
+        const diff = targetTime - now;
+        if (diff > 0) {
+          setTimeRemaining(diff);
+        } else {
+          setTimeRemaining(0);
+        }
+      }
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [activeOrderCycle]);
-
-  const updateTimer = () => {
-    if (!activeOrderCycle) return;
-
-    const now = Date.now();
-    let targetTime;
-
-    if (activeOrderCycle.phase === 'collecting') {
-      targetTime = activeOrderCycle.collectingEndsAt?.toMillis() || 0;
-    } else if (activeOrderCycle.phase === 'payment_window') {
-      targetTime = activeOrderCycle.paymentWindowEndsAt?.toMillis() || 0;
-    } else {
-      setTimeRemaining(null);
-      return;
-    }
-
-    const remaining = targetTime - now;
-
-    if (remaining <= 0) {
-      setTimeRemaining(null);
-      fetchActiveOrderCycle();
-    } else {
-      const hours = Math.floor(remaining / (1000 * 60 * 60));
-      const minutes = Math.floor((remaining % (1000 * 60 * 60)) / (1000 * 60));
-      const seconds = Math.floor((remaining % (1000 * 60)) / 1000);
-      setTimeRemaining({ hours, minutes, seconds });
-    }
-  };
+  }, [orderCycle]);
 
   const fetchGroupDetails = async () => {
     try {
-      const groupData = await groupService.getGroupById(groupId);
+      setLoading(true);
+      const groupDoc = await getDoc(doc(db, 'groups', groupId));
       
-      if (!groupData) {
+      if (groupDoc.exists()) {
+        const groupData = { id: groupDoc.id, ...groupDoc.data() };
+        setGroup(groupData);
+        
+        // Check if user is a member
+        const isMember = groupData.members?.includes(currentUser.uid);
+        
+        if (!isMember) {
+          toast.error('You are not a member of this group. Please join first.');
+          navigate('/groups');
+          return;
+        }
+        
+        // Fetch active order cycle if exists
+        if (groupData.currentOrderCycle) {
+          const cycleDoc = await getDoc(doc(db, 'orderCycles', groupData.currentOrderCycle));
+          if (cycleDoc.exists()) {
+            setOrderCycle({ id: cycleDoc.id, ...cycleDoc.data() });
+          }
+        }
+      } else {
         toast.error('Group not found');
         navigate('/groups');
-        return;
       }
-      
-      setGroup(groupData);
-      
-      // Subscribe to real-time updates
-      const unsubscribe = groupService.subscribeToGroup(groupId, (data) => {
-        setGroup(data);
-      });
-
-      return () => unsubscribe();
     } catch (error) {
       console.error('Error fetching group:', error);
       toast.error('Failed to load group');
@@ -96,406 +129,368 @@ export default function GroupDetail() {
     }
   };
 
-  const fetchActiveOrderCycle = async () => {
-    try {
-      const cycles = await orderService.getActiveOrderCycles(groupId);
-      
-      if (cycles.length > 0) {
-        setActiveOrderCycle(cycles[0]);
-        
-        // Subscribe to updates
-        const unsubscribe = orderService.subscribeToOrderCycle(cycles[0].id, (data) => {
-          setActiveOrderCycle(data);
-        });
-        
-        return () => unsubscribe();
-      } else {
-        setActiveOrderCycle(null);
-      }
-    } catch (error) {
-      console.error('Error fetching cycle:', error);
+  const handleStartShopping = () => {
+    // Store selected group in localStorage for cart
+    localStorage.setItem('selectedGroupId', groupId);
+    navigate('/products', { state: { fromGroup: true } });
+  };
+
+  const formatTimeRemaining = (ms) => {
+    if (!ms) return 'Calculating...';
+    
+    const hours = Math.floor(ms / (1000 * 60 * 60));
+    const minutes = Math.floor((ms % (1000 * 60 * 60)) / (1000 * 60));
+    const seconds = Math.floor((ms % (1000 * 60)) / 1000);
+    
+    if (hours > 0) {
+      return `${hours}h ${minutes}m ${seconds}s`;
+    } else if (minutes > 0) {
+      return `${minutes}m ${seconds}s`;
+    } else {
+      return `${seconds}s`;
     }
   };
 
-  const handleJoinGroup = async () => {
+  const getPhaseInfo = (phase) => {
+    const phases = {
+      collecting: {
+        title: 'Collecting Orders',
+        color: 'blue',
+        icon: ClockIcon,
+        description: 'Add items to your cart and place your order'
+      },
+      payment_window: {
+        title: 'Payment Window',
+        color: 'yellow',
+        icon: CurrencyRupeeIcon,
+        description: 'Complete your payment to confirm your order'
+      },
+      confirmed: {
+        title: 'Order Confirmed',
+        color: 'green',
+        icon: CheckCircleIcon,
+        description: 'Your order is confirmed and being processed'
+      },
+      processing: {
+        title: 'Processing',
+        color: 'purple',
+        icon: TruckIcon,
+        description: 'Your order is being prepared for delivery'
+      },
+      completed: {
+        title: 'Completed',
+        color: 'green',
+        icon: CheckCircleIcon,
+        description: 'Order delivered successfully'
+      },
+      cancelled: {
+        title: 'Cancelled',
+        color: 'red',
+        icon: XCircleIcon,
+        description: 'This order cycle was cancelled'
+      }
+    };
+    
+    return phases[phase] || phases.collecting;
+  };
+
+  const getUserParticipation = () => {
+    if (!orderCycle || !currentUser) return null;
+    return orderCycle.participants?.find(p => p.userId === currentUser.uid);
+  };
+
+  const handlePayment = async () => {
+    const participation = getUserParticipation();
+    if (!participation) return;
+
+    const paymentData = {
+      orderId: orderCycle.id,
+      groupId: groupId,
+      userId: currentUser.uid,
+      userName: userProfile.name,
+      userEmail: userProfile.email,
+      userPhone: userProfile.phone,
+      amount: participation.totalAmount
+    };
+
     try {
-      await groupService.joinGroup(groupId, currentUser.uid);
-      toast.success('Successfully joined group!', { icon: '🎉' });
-      await fetchGroupDetails();
+      await paymentService.initiatePayment(paymentData);
     } catch (error) {
-      console.error('Error joining group:', error);
-      toast.error(error.message || 'Failed to join group');
+      console.error('Payment error:', error);
+      toast.error('Failed to initiate payment');
     }
   };
 
   if (loading) {
-    return <LoadingSpinner size="large" text="Loading group..." fullScreen />;
-  }
-
-  if (!group) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-50 to-green-50">
         <div className="text-center">
-          <h2 className="text-2xl font-bold mb-4">Group not found</h2>
-          <button onClick={() => navigate('/groups')} className="btn-primary">
-            Back to Groups
-          </button>
+          <div className="h-12 w-12 animate-spin rounded-full border-4 border-gray-300 border-t-green-600 mx-auto mb-4"></div>
+          <p className="text-gray-600">Loading group details...</p>
         </div>
       </div>
     );
   }
 
-  const isMember = group.members?.includes(currentUser.uid);
-  const isCreator = group.createdBy === currentUser.uid;
-  const memberCount = group.members?.length || 0;
+  if (!group) return null;
+
+  const phaseInfo = orderCycle ? getPhaseInfo(orderCycle.phase) : null;
+  const PhaseIcon = phaseInfo?.icon;
+  const userParticipation = getUserParticipation();
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-green-50 px-4 py-8">
-      <div className="max-w-7xl mx-auto">
+    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-green-50 py-8">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         {/* Back Button */}
-        <button 
-          onClick={() => navigate('/groups')} 
-          className="flex items-center gap-2 text-gray-600 hover:text-gray-800 mb-6 transition"
+        <button
+          onClick={() => navigate('/groups')}
+          className="inline-flex items-center gap-2 px-4 py-2 text-gray-700 hover:text-green-600 font-medium mb-6 transition-colors"
         >
           <ArrowLeftIcon className="h-5 w-5" />
-          Back to Groups
+          <span>Back to Groups</span>
         </button>
 
-        {/* Header */}
-        <div className="bg-white rounded-2xl shadow-xl overflow-hidden mb-8">
-          <div className="h-32 bg-gradient-to-r from-green-600 to-emerald-600 relative">
+        {/* Group Header */}
+        <div className="bg-white rounded-2xl shadow-lg overflow-hidden mb-8">
+          <div className="relative h-48 bg-gradient-to-br from-green-500 via-emerald-500 to-green-600 flex items-center justify-center">
             <div className="absolute inset-0 opacity-20">
-              <div className="absolute -right-20 -top-20 w-64 h-64 bg-white rounded-full"></div>
+              <div className="absolute top-0 right-0 w-64 h-64 bg-white rounded-full -mr-32 -mt-32"></div>
+              <div className="absolute bottom-0 left-0 w-64 h-64 bg-white rounded-full -ml-32 -mb-32"></div>
+            </div>
+            <UserGroupIcon className="h-24 w-24 text-white relative z-10" />
+          </div>
+          
+          <div className="p-8">
+            <h1 className="text-3xl font-bold text-gray-900 mb-4">{group.name}</h1>
+            
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 bg-green-100 rounded-xl flex items-center justify-center">
+                  <MapPinIcon className="h-6 w-6 text-green-600" />
+                </div>
+                <div>
+                  <div className="text-sm text-gray-600">Location</div>
+                  <div className="font-semibold text-gray-900">
+                    {group.area?.city}, {group.area?.pincode}
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 bg-blue-100 rounded-xl flex items-center justify-center">
+                  <UsersIcon className="h-6 w-6 text-blue-600" />
+                </div>
+                <div>
+                  <div className="text-sm text-gray-600">Members</div>
+                  <div className="font-semibold text-gray-900">
+                    {group.members?.length || 0} / {group.maxMembers || 100}
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 bg-purple-100 rounded-xl flex items-center justify-center">
+                  <ShoppingBagIcon className="h-6 w-6 text-purple-600" />
+                </div>
+                <div>
+                  <div className="text-sm text-gray-600">Total Orders</div>
+                  <div className="font-semibold text-gray-900">
+                    {group.stats?.totalOrders || 0}
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
+        </div>
 
-          <div className="p-8">
-            <div className="flex justify-between items-start mb-6">
-              <div className="flex-1">
-                <h1 className="text-4xl font-bold text-gray-800 mb-2">{group.name}</h1>
-                <p className="text-gray-600 text-lg">{group.description}</p>
-              </div>
-              
-              <div className="flex items-center gap-3">
-                {isMember ? (
-                  <span className="px-4 py-2 bg-green-50 text-green-700 rounded-lg font-semibold border border-green-200 flex items-center gap-2">
-                    <CheckCircleIcon className="h-5 w-5" />
-                    Member
-                  </span>
-                ) : (
-                  <button 
-                    onClick={handleJoinGroup} 
-                    className="px-6 py-3 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-xl font-semibold hover:shadow-lg"
-                  >
-                    Join Group
-                  </button>
+        {/* Order Cycle Status */}
+        {orderCycle ? (
+          <div className="space-y-6">
+            {/* Phase Banner */}
+            <div className={`bg-gradient-to-r ${
+              phaseInfo.color === 'blue' ? 'from-blue-500 to-cyan-600' :
+              phaseInfo.color === 'yellow' ? 'from-yellow-500 to-orange-600' :
+              phaseInfo.color === 'green' ? 'from-green-500 to-emerald-600' :
+              phaseInfo.color === 'purple' ? 'from-purple-500 to-pink-600' :
+              'from-red-500 to-pink-600'
+            } text-white rounded-2xl shadow-lg p-6`}>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-4">
+                  {PhaseIcon && (
+                    <div className="w-16 h-16 bg-white/20 backdrop-blur-sm rounded-xl flex items-center justify-center">
+                      <PhaseIcon className="h-8 w-8" />
+                    </div>
+                  )}
+                  <div>
+                    <h2 className="text-2xl font-bold mb-1">{phaseInfo.title}</h2>
+                    <p className="text-white/90">{phaseInfo.description}</p>
+                  </div>
+                </div>
+
+                {timeRemaining !== null && (orderCycle.phase === 'collecting' || orderCycle.phase === 'payment_window') && (
+                  <div className="text-right">
+                    <div className="text-sm text-white/90 mb-1">Time Remaining</div>
+                    <div className="text-3xl font-bold">{formatTimeRemaining(timeRemaining)}</div>
+                  </div>
                 )}
               </div>
             </div>
 
-            {/* Quick Stats */}
-            <div className="grid grid-cols-3 gap-4">
-              <QuickStat icon={UsersIcon} label="Members" value={memberCount} color="blue" />
-              <QuickStat icon={MapPinIcon} label="Area" value={group.area || 'Local'} color="purple" isText />
-              <QuickStat 
-                icon={ShoppingBagIcon} 
-                label="Active Cycle" 
-                value={activeOrderCycle ? 'Yes' : 'No'} 
-                color="green" 
-                isText 
-              />
+            {/* User's Order Status */}
+            {userParticipation && (
+              <div className="bg-white rounded-2xl shadow-lg p-6">
+                <h3 className="text-xl font-bold text-gray-900 mb-4">Your Order</h3>
+                
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+                  <div className="bg-blue-50 rounded-xl p-4">
+                    <div className="text-sm text-blue-700 mb-1">Items</div>
+                    <div className="text-2xl font-bold text-blue-900">
+                      {userParticipation.items?.length || 0}
+                    </div>
+                  </div>
+
+                  <div className="bg-green-50 rounded-xl p-4">
+                    <div className="text-sm text-green-700 mb-1">Total Amount</div>
+                    <div className="text-2xl font-bold text-green-900">
+                      ₹{userParticipation.totalAmount?.toLocaleString()}
+                    </div>
+                  </div>
+
+                  <div className="bg-purple-50 rounded-xl p-4">
+                    <div className="text-sm text-purple-700 mb-1">Payment Status</div>
+                    <div className="text-lg font-bold text-purple-900 capitalize">
+                      {userParticipation.paymentStatus}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Payment Button */}
+                {orderCycle.phase === 'payment_window' && userParticipation.paymentStatus === 'pending' && (
+                  <button
+                    onClick={handlePayment}
+                    className="w-full py-4 px-6 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-xl font-bold text-lg hover:shadow-xl hover:shadow-green-500/50 transform hover:-translate-y-0.5 transition-all duration-200 flex items-center justify-center gap-2"
+                  >
+                    <CurrencyRupeeIcon className="h-6 w-6" />
+                    <span>Pay Now - ₹{userParticipation.totalAmount?.toLocaleString()}</span>
+                  </button>
+                )}
+
+                {/* Items List */}
+                <div className="mt-6">
+                  <h4 className="font-semibold text-gray-900 mb-3">Order Items</h4>
+                  <div className="space-y-2">
+                    {userParticipation.items?.map((item, index) => (
+                      <div key={index} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                        <div>
+                          <div className="font-medium text-gray-900">{item.name}</div>
+                          <div className="text-sm text-gray-600">Quantity: {item.quantity}</div>
+                        </div>
+                        <div className="text-lg font-bold text-green-600">
+                          ₹{(item.groupPrice * item.quantity).toLocaleString()}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Product Progress */}
+            {orderCycle.productOrders && Object.keys(orderCycle.productOrders).length > 0 && (
+              <div className="bg-white rounded-2xl shadow-lg p-6">
+                <h3 className="text-xl font-bold text-gray-900 mb-4">Product Progress</h3>
+                
+                <div className="space-y-4">
+                  {Object.values(orderCycle.productOrders).map((product, index) => {
+                    const progress = Math.min((product.quantity / product.minQuantity) * 100, 100);
+                    
+                    return (
+                      <div key={index} className="border border-gray-200 rounded-xl p-4">
+                        <div className="flex items-start justify-between mb-3">
+                          <div>
+                            <h4 className="font-semibold text-gray-900 mb-1">{product.name}</h4>
+                            <div className="text-sm text-gray-600">
+                              {product.quantity} / {product.minQuantity} units
+                            </div>
+                          </div>
+                          {product.metMinimum ? (
+                            <span className="flex items-center gap-1 px-3 py-1 bg-green-100 text-green-800 rounded-full text-sm font-medium">
+                              <CheckCircleIcon className="h-4 w-4" />
+                              <span>Goal Met!</span>
+                            </span>
+                          ) : (
+                            <span className="px-3 py-1 bg-gray-100 text-gray-600 rounded-full text-sm font-medium">
+                              {product.minQuantity - product.quantity} more needed
+                            </span>
+                          )}
+                        </div>
+                        
+                        <ProgressBar
+                          progress={progress}
+                          color={product.metMinimum ? 'green' : 'blue'}
+                          showPercentage={false}
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* All Participants */}
+            <div className="bg-white rounded-2xl shadow-lg p-6">
+              <h3 className="text-xl font-bold text-gray-900 mb-4">
+                Participants ({orderCycle.totalParticipants || 0})
+              </h3>
+              
+              <div className="space-y-3">
+                {orderCycle.participants?.map((participant, index) => (
+                  <div key={index} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 bg-gradient-to-br from-green-600 to-emerald-600 rounded-full flex items-center justify-center text-white font-bold">
+                        {participant.userName.charAt(0).toUpperCase()}
+                      </div>
+                      <div>
+                        <div className="font-medium text-gray-900">{participant.userName}</div>
+                        <div className="text-sm text-gray-600">
+                          {participant.items?.length} items • ₹{participant.totalAmount?.toLocaleString()}
+                        </div>
+                      </div>
+                    </div>
+                    
+                    <div className="flex items-center gap-2">
+                      {participant.paymentStatus === 'paid' ? (
+                        <span className="flex items-center gap-1 px-3 py-1 bg-green-100 text-green-800 rounded-full text-sm font-medium">
+                          <CheckCircleIcon className="h-4 w-4" />
+                          <span>Paid</span>
+                        </span>
+                      ) : (
+                        <span className="px-3 py-1 bg-yellow-100 text-yellow-800 rounded-full text-sm font-medium">
+                          Pending
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
-        </div>
-
-        {/* Active Order Cycle */}
-        {isMember && activeOrderCycle && (
-          <ActiveOrderCycleCard 
-            cycle={activeOrderCycle}
-            timeRemaining={timeRemaining}
-            currentUserId={currentUser.uid}
-            groupId={groupId}
-          />
-        )}
-
-        {/* Start Shopping CTA */}
-        {isMember && !activeOrderCycle && (
-          <div className="bg-gradient-to-br from-blue-50 to-cyan-50 rounded-2xl shadow-lg p-8 text-center mb-8">
-            <SparklesIcon className="h-16 w-16 text-blue-600 mx-auto mb-4" />
-            <h3 className="text-2xl font-bold text-gray-800 mb-2">No Active Order Cycle</h3>
-            <p className="text-gray-600 mb-6">Start shopping to begin a new group order!</p>
+        ) : (
+          <div className="bg-white rounded-2xl shadow-lg p-12 text-center">
+            <ShoppingBagIcon className="h-16 w-16 text-gray-300 mx-auto mb-4" />
+            <h3 className="text-xl font-bold text-gray-900 mb-2">No Active Order Cycle</h3>
+            <p className="text-gray-600 mb-6">
+              There's no active order cycle for this group. Start shopping to create a new one!
+            </p>
             <button
-              onClick={() => navigate('/products')}
-              className="px-8 py-4 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-xl font-bold hover:shadow-xl transition"
+              onClick={handleStartShopping}
+              className="inline-flex items-center gap-2 px-8 py-3 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-xl font-bold hover:shadow-xl hover:shadow-green-500/50 transition-all"
             >
-              Start Shopping
+              <ShoppingBagIcon className="h-5 w-5" />
+              <span>Start Shopping</span>
             </button>
           </div>
         )}
-
-        {/* Members Section */}
-        {isMember && (
-          <div className="bg-white rounded-2xl shadow-lg p-6">
-            <h3 className="text-2xl font-bold mb-6">Members ({memberCount})</h3>
-            <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {group.members?.map((memberId, index) => (
-                <div key={memberId} className="flex items-center gap-3 p-4 bg-gray-50 rounded-lg">
-                  <div className="w-10 h-10 rounded-full bg-gradient-to-br from-green-500 to-emerald-600 flex items-center justify-center text-white font-bold">
-                    {index + 1}
-                  </div>
-                  <div>
-                    <p className="font-medium">Member {index + 1}</p>
-                    {memberId === group.createdBy && (
-                      <span className="text-xs bg-purple-100 text-purple-600 rounded-full px-2 py-0.5 font-semibold">
-                        Creator
-                      </span>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// Quick Stat Component
-function QuickStat({ icon: Icon, label, value, color, isText = false }) {
-  const colors = {
-    blue: 'from-blue-500 to-cyan-600',
-    green: 'from-green-500 to-emerald-600',
-    purple: 'from-purple-500 to-pink-600'
-  };
-
-  return (
-    <div className="bg-gray-50 rounded-xl p-4 border border-gray-200">
-      <div className={`inline-flex p-2 bg-gradient-to-br ${colors[color]} rounded-lg mb-2`}>
-        <Icon className="h-5 w-5 text-white" />
-      </div>
-      <p className="text-xs text-gray-600 font-medium mb-1">{label}</p>
-      <p className={`font-bold text-gray-800 ${isText ? 'text-sm truncate' : 'text-2xl'}`}>{value}</p>
-    </div>
-  );
-}
-
-// Active Order Cycle Card
-function ActiveOrderCycleCard({ cycle, timeRemaining, currentUserId, groupId }) {
-  const navigate = useNavigate();
-
-  const getPhaseInfo = () => {
-    if (cycle.phase === 'collecting') {
-      return {
-        bg: 'from-blue-500 to-cyan-600',
-        icon: <ClockIcon className="h-8 w-8" />,
-        title: '⏱️ Collecting Orders',
-        desc: 'Members are adding items. Timer shows when collecting phase ends.'
-      };
-    }
-    if (cycle.phase === 'payment_window') {
-      return {
-        bg: 'from-orange-500 to-red-600',
-        icon: <FireIcon className="h-8 w-8" />,
-        title: '💳 Payment Window Open!',
-        desc: 'Complete payment before timer ends or order will be cancelled.'
-      };
-    }
-    if (cycle.phase === 'confirmed') {
-      return {
-        bg: 'from-green-500 to-emerald-600',
-        icon: <CheckCircleIcon className="h-8 w-8" />,
-        title: '✅ Order Confirmed',
-        desc: 'All payments received. Order is being prepared!'
-      };
-    }
-    if (cycle.phase === 'processing') {
-      return {
-        bg: 'from-purple-500 to-pink-600',
-        icon: <TruckIcon className="h-8 w-8" />,
-        title: '📦 Processing',
-        desc: 'Your order is being prepared for delivery.'
-      };
-    }
-    return {
-      bg: 'from-gray-500 to-gray-600',
-      icon: <SparklesIcon className="h-8 w-8" />,
-      title: 'Order Cycle',
-      desc: 'Group order in progress'
-    };
-  };
-
-  const info = getPhaseInfo();
-  const userParticipant = cycle.participants?.find(p => p.userId === currentUserId);
-
-  return (
-    <div className="bg-white rounded-2xl shadow-xl overflow-hidden mb-8">
-      {/* Phase Header */}
-      <div className={`bg-gradient-to-r ${info.bg} text-white p-6`}>
-        <div className="flex items-start justify-between mb-4">
-          <div className="flex items-center gap-4">
-            {info.icon}
-            <div>
-              <h3 className="text-2xl font-bold mb-1">{info.title}</h3>
-              <p className="text-white/90">{info.desc}</p>
-            </div>
-          </div>
-          
-          {timeRemaining && (
-            <div className="flex gap-2">
-              <TimeUnit value={timeRemaining.hours} label="H" />
-              <TimeUnit value={timeRemaining.minutes} label="M" />
-              <TimeUnit value={timeRemaining.seconds} label="S" />
-            </div>
-          )}
-        </div>
-
-        <div className="grid grid-cols-3 gap-4 pt-4 border-t border-white/20">
-          <div>
-            <p className="text-white/80 text-xs mb-1">Participants</p>
-            <p className="text-2xl font-bold">{cycle.totalParticipants || 0}</p>
-          </div>
-          <div>
-            <p className="text-white/80 text-xs mb-1">Total Value</p>
-            <p className="text-2xl font-bold">₹{cycle.totalAmount?.toLocaleString() || 0}</p>
-          </div>
-          <div>
-            <p className="text-white/80 text-xs mb-1">Your Status</p>
-            <p className="text-lg font-bold">
-              {userParticipant?.paymentStatus === 'paid' ? '✓ Paid' : 
-               userParticipant ? '⏳ Pending' : '—'}
-            </p>
-          </div>
-        </div>
-      </div>
-
-      {/* Product Orders */}
-      {cycle.productOrders && Object.keys(cycle.productOrders).length > 0 && (
-        <div className="p-6 border-b">
-          <h4 className="font-bold text-lg mb-4">Products in this Cycle</h4>
-          <div className="space-y-3">
-            {Object.entries(cycle.productOrders).map(([productId, data]) => (
-              <ProductOrderRow key={productId} data={data} />
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Participants */}
-      {cycle.participants && cycle.participants.length > 0 && (
-        <div className="p-6">
-          <h4 className="font-bold text-lg mb-4">All Participants ({cycle.participants.length})</h4>
-          <div className="grid md:grid-cols-2 gap-3">
-            {cycle.participants.map((participant, idx) => (
-              <ParticipantCard 
-                key={idx} 
-                participant={participant}
-                isCurrentUser={participant.userId === currentUserId}
-              />
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Actions */}
-      <div className="p-6 bg-gray-50 border-t flex gap-3">
-        {cycle.phase === 'collecting' && (
-          <button
-            onClick={() => navigate('/products')}
-            className="flex-1 py-3 bg-gradient-to-r from-blue-600 to-cyan-600 text-white rounded-xl font-bold hover:shadow-lg transition"
-          >
-            Continue Shopping
-          </button>
-        )}
-        
-        {cycle.phase === 'payment_window' && userParticipant?.paymentStatus !== 'paid' && (
-          <button
-            onClick={() => navigate('/cart')}
-            className="flex-1 py-3 bg-gradient-to-r from-orange-600 to-red-600 text-white rounded-xl font-bold hover:shadow-lg transition"
-          >
-            Complete Payment
-          </button>
-        )}
-
-        <button
-          onClick={() => navigate('/cart')}
-          className="flex-1 py-3 bg-gray-200 text-gray-700 rounded-xl font-bold hover:bg-gray-300 transition"
-        >
-          View Cart
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function TimeUnit({ value, label }) {
-  return (
-    <div className="text-center">
-      <div className="bg-white/20 rounded-lg px-3 py-2 min-w-[50px]">
-        <span className="text-2xl font-bold">{String(value).padStart(2, '0')}</span>
-      </div>
-      <span className="text-xs opacity-75 mt-1 block">{label}</span>
-    </div>
-  );
-}
-
-function ProductOrderRow({ data }) {
-  const progress = (data.quantity / data.minQuantity) * 100;
-  const isMet = data.quantity >= data.minQuantity;
-
-  return (
-    <div className="p-4 bg-gray-50 rounded-lg">
-      <div className="flex justify-between items-start mb-2">
-        <div>
-          <p className="font-semibold">{data.name}</p>
-          <p className="text-sm text-gray-600">
-            {data.participants?.length || 0} members ordering
-          </p>
-        </div>
-        <span className={`px-3 py-1 rounded-full text-xs font-bold ${
-          isMet ? 'bg-green-100 text-green-800' : 'bg-orange-100 text-orange-800'
-        }`}>
-          {isMet ? '✓ Min Met' : `Need ${data.minQuantity - data.quantity}`}
-        </span>
-      </div>
-      
-      <div className="flex items-center justify-between text-sm mb-2">
-        <span className="font-medium">{data.quantity} / {data.minQuantity}</span>
-        <span className="text-gray-600">₹{data.price} each</span>
-      </div>
-      
-      <div className="w-full bg-gray-200 rounded-full h-2">
-        <div 
-          className={`h-full rounded-full ${isMet ? 'bg-green-600' : 'bg-orange-500'}`}
-          style={{ width: `${Math.min(progress, 100)}%` }}
-        />
-      </div>
-    </div>
-  );
-}
-
-function ParticipantCard({ participant, isCurrentUser }) {
-  return (
-    <div className={`p-4 rounded-lg border-2 ${
-      isCurrentUser ? 'border-blue-300 bg-blue-50' : 'border-gray-200 bg-white'
-    }`}>
-      <div className="flex items-center justify-between mb-2">
-        <div>
-          <p className="font-semibold">
-            {participant.userName}
-            {isCurrentUser && <span className="text-blue-600 ml-2">(You)</span>}
-          </p>
-          <p className="text-sm text-gray-600">
-            {participant.items?.length || 0} items • ₹{participant.totalAmount}
-          </p>
-        </div>
-        <span className={`px-3 py-1 rounded-full text-xs font-bold ${
-          participant.paymentStatus === 'paid' 
-            ? 'bg-green-100 text-green-800 border border-green-200' 
-            : 'bg-yellow-100 text-yellow-800 border border-yellow-200'
-        }`}>
-          {participant.paymentStatus === 'paid' ? '✓ Paid' : '⏳ Pending'}
-        </span>
       </div>
     </div>
   );
