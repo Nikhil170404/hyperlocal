@@ -1,4 +1,4 @@
-// src/pages/Groups.jsx - Enhanced with Location & Join Features
+// src/pages/Groups.jsx - FIXED: Proper member checking
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { collection, getDocs, query, where } from 'firebase/firestore';
@@ -48,13 +48,22 @@ export default function Groups() {
         ...doc.data()
       }));
 
-      // Separate user's groups and other groups
-      const userGroupIds = userProfile?.joinedGroups || [];
-      const joined = allGroups.filter(g => userGroupIds.includes(g.id));
-      const available = allGroups.filter(g => !userGroupIds.includes(g.id));
+      // FIXED: Check group's members array instead of userProfile.joinedGroups
+      const joined = allGroups.filter(g => 
+        g.members?.includes(currentUser.uid)
+      );
+      const available = allGroups.filter(g => 
+        !g.members?.includes(currentUser.uid)
+      );
 
       setMyGroups(joined);
       setGroups(available);
+      
+      console.log('✅ Groups loaded:', {
+        myGroups: joined.length,
+        availableGroups: available.length,
+        userId: currentUser.uid
+      });
     } catch (error) {
       console.error('Error fetching groups:', error);
       toast.error('Failed to load groups');
@@ -69,6 +78,8 @@ export default function Groups() {
     try {
       await groupService.joinGroup(groupId, currentUser.uid);
       toast.success('Successfully joined group! 🎉');
+      
+      // Refresh groups to update UI
       await fetchGroups();
     } catch (error) {
       console.error('Error joining group:', error);
@@ -169,12 +180,14 @@ export default function Groups() {
             <div className="bg-white rounded-2xl shadow-md p-12 text-center">
               <UserGroupIcon className="h-16 w-16 text-gray-300 mx-auto mb-4" />
               <h3 className="text-xl font-bold text-gray-900 mb-2">
-                {searchTerm ? 'No groups found' : 'No groups available'}
+                {searchTerm ? 'No groups found' : myGroups.length > 0 ? 'All caught up!' : 'No groups available'}
               </h3>
               <p className="text-gray-600 mb-6">
                 {searchTerm 
                   ? 'Try adjusting your search terms' 
-                  : 'New groups will appear here as they are created'
+                  : myGroups.length > 0 
+                    ? "You've joined all available groups in your area"
+                    : 'New groups will appear here as they are created'
                 }
               </p>
               {searchTerm && (
@@ -305,7 +318,7 @@ function GroupCard({ group, isMember, isJoining, onJoin, onNavigate }) {
             onClick={onNavigate}
             className="w-full py-3 px-4 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-xl font-bold hover:shadow-xl hover:shadow-green-500/50 transform hover:-translate-y-0.5 transition-all duration-200 flex items-center justify-center gap-2"
           >
-            <span>View Group</span>
+            <span>View Details</span>
           </button>
         ) : (
           <button
