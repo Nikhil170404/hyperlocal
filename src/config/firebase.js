@@ -6,13 +6,14 @@ import { getDatabase } from "firebase/database";
 import { getAnalytics } from "firebase/analytics";
 
 const firebaseConfig = {
-  apiKey: "AIzaSyBlbgPlYZnHUZ8gGmDm7pFQlpGubGbUYZY",
-  authDomain: "hyperlocal-1e0d5.firebaseapp.com",
-  projectId: "hyperlocal-1e0d5",
-  storageBucket: "hyperlocal-1e0d5.firebasestorage.app",
-  messagingSenderId: "554130415887",
-  appId: "1:554130415887:web:0dfe67e0ae65425e409e7a",
-  measurementId: "G-HZZV1GZE4Y"
+  apiKey: "AIzaSyAeDZ1rZVBdt-LqBGifma6WqqbjvQWmuXg",
+  authDomain: "hyperlocal-8264a.firebaseapp.com",
+  databaseURL: "https://hyperlocal-8264a-default-rtdb.firebaseio.com",
+  projectId: "hyperlocal-8264a",
+  storageBucket: "hyperlocal-8264a.firebasestorage.app",
+  messagingSenderId: "1033236341681",
+  appId: "1:1033236341681:web:0a61e803033b1920475390",
+  measurementId: "G-XGFQFV41MG"
 };
 
 // Initialize Firebase
