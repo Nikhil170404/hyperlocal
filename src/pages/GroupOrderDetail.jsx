@@ -1,14 +1,15 @@
-// src/pages/GroupOrderDetail.jsx - FIXED ICON IMPORT
+// src/pages/GroupOrderDetail.jsx - COMPLETE WITH COUNTDOWN TIMER
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { orderService } from '../services/groupService';
 import { paymentService } from '../services/paymentService';
 import LoadingSpinner from '../components/LoadingSpinner';
+import CountdownTimer from '../components/CountdownTimer';
 import { 
   CheckCircleIcon, ClockIcon, CurrencyRupeeIcon, ShoppingBagIcon, TruckIcon,
   ExclamationCircleIcon, ArrowLeftIcon, CreditCardIcon, ChartBarIcon,
-  UsersIcon, SparklesIcon, HomeIcon, XCircleIcon, CubeIcon  // CHANGED: PackageIcon → CubeIcon
+  UsersIcon, SparklesIcon, HomeIcon, XCircleIcon, CubeIcon, FireIcon
 } from '@heroicons/react/24/outline';
 import toast from 'react-hot-toast';
 
@@ -89,6 +90,13 @@ export default function GroupOrderDetail() {
     }
   };
 
+  const handleTimerExpire = () => {
+    toast.error('Time has expired! Refreshing order status...', { duration: 5000 });
+    setTimeout(() => {
+      window.location.reload();
+    }, 2000);
+  };
+
   if (loading) {
     return <LoadingSpinner size="large" text="Loading order..." fullScreen />;
   }
@@ -135,9 +143,30 @@ export default function GroupOrderDetail() {
           <OrderStatusBadge status={orderCycle.phase} />
         </div>
 
-        {/* Payment Window Warning */}
+        {/* COUNTDOWN TIMER - Collecting Phase */}
+        {orderCycle.phase === 'collecting' && orderCycle.collectingEndsAt && (
+          <div className="mb-8">
+            <CountdownTimer
+              endTime={orderCycle.collectingEndsAt}
+              phase="collecting"
+              title="🛒 Collection Phase Ending"
+              size="large"
+              onExpire={handleTimerExpire}
+            />
+          </div>
+        )}
+
+        {/* COUNTDOWN TIMER - Payment Window */}
         {orderCycle.phase === 'payment_window' && orderCycle.paymentWindowEndsAt && (
-          <PaymentWindowAlert expiresAt={orderCycle.paymentWindowEndsAt.toMillis()} />
+          <div className="mb-8">
+            <CountdownTimer
+              endTime={orderCycle.paymentWindowEndsAt}
+              phase="payment_window"
+              title="💳 Payment Deadline"
+              size="large"
+              onExpire={handleTimerExpire}
+            />
+          </div>
         )}
 
         {/* Stats Grid */}
@@ -299,44 +328,6 @@ function PaymentStatusBadge({ status }) {
       <Icon className="h-4 w-4" />
       {config.label}
     </span>
-  );
-}
-
-// Payment Window Alert
-function PaymentWindowAlert({ expiresAt }) {
-  const [timeLeft, setTimeLeft] = useState('');
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      const now = Date.now();
-      const remaining = expiresAt - now;
-
-      if (remaining <= 0) {
-        setTimeLeft('Expired');
-      } else {
-        const hours = Math.floor(remaining / (1000 * 60 * 60));
-        const minutes = Math.floor((remaining % (1000 * 60 * 60)) / (1000 * 60));
-        setTimeLeft(`${hours}h ${minutes}m`);
-      }
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, [expiresAt]);
-
-  return (
-    <div className="mb-6 p-4 sm:p-6 bg-gradient-to-r from-orange-50 to-red-50 border-2 border-orange-400 rounded-2xl animate-pulse-ring">
-      <div className="flex items-start gap-3 sm:gap-4">
-        <ClockIcon className="h-6 w-6 sm:h-8 sm:w-8 text-orange-600 flex-shrink-0 mt-1" />
-        <div className="flex-1">
-          <h3 className="text-lg sm:text-xl font-bold text-orange-900 mb-2">⏰ Payment Window Active</h3>
-          <p className="text-sm sm:text-base text-orange-800 mb-3">Complete your payment before time expires!</p>
-          <div className="inline-flex items-baseline bg-white px-3 sm:px-4 py-2 rounded-lg shadow-sm">
-            <span className="font-bold text-orange-600 text-xl sm:text-2xl">{timeLeft}</span>
-            <span className="text-xs sm:text-sm text-gray-600 ml-2">remaining</span>
-          </div>
-        </div>
-      </div>
-    </div>
   );
 }
 

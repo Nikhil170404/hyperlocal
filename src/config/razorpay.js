@@ -1,7 +1,7 @@
-// src/config/razorpay.js - FIXED & OPTIMIZED
+// src/config/razorpay.js - UPDATED TO USE ENVIRONMENT VARIABLES
 
 /**
- * Razorpay Configuration
+ * Razorpay Configuration from Environment Variables
  * 
  * IMPORTANT NOTES:
  * 1. Never expose KEY_SECRET in production client-side code
@@ -9,22 +9,42 @@
  * 3. Use environment variables for sensitive data
  */
 
+// Get configuration from environment variables
+const KEY_ID = import.meta.env.VITE_RAZORPAY_KEY_ID;
+const KEY_SECRET = import.meta.env.RAZORPAY_KEY_SECRET; // Backend only!
+
+// Validate Razorpay Key ID
+if (!KEY_ID) {
+  console.error('❌ Missing VITE_RAZORPAY_KEY_ID in environment variables');
+  throw new Error('Razorpay configuration missing. Please add VITE_RAZORPAY_KEY_ID to .env file');
+}
+
+// Warn if KEY_SECRET is exposed (security issue)
+if (KEY_SECRET && import.meta.env.PROD) {
+  console.warn('⚠️ WARNING: RAZORPAY_KEY_SECRET should NEVER be in client-side code in production!');
+}
+
+// Log configuration status (only in development)
+if (import.meta.env.DEV) {
+  console.log('💳 Razorpay configuration loaded from environment variables');
+  console.log('✅ Key ID:', KEY_ID?.substring(0, 15) + '...');
+  console.log('⚠️ Environment:', import.meta.env.MODE);
+}
+
 export const RAZORPAY_CONFIG = {
-  // Test Mode Credentials - Replace with your actual keys
-  KEY_ID: 'rzp_test_RNTPHWzRLB1xYG',
+  // Public key - safe to expose in frontend
+  KEY_ID: KEY_ID,
   
   // SECURITY WARNING: Never expose KEY_SECRET in client-side code
   // This is only for development/testing
   // In production, keep this server-side only
-  KEY_SECRET: 'M7vID0ilFMnZFWrKrXOyVPW7',
+  KEY_SECRET: KEY_SECRET,
   
   // Payment options
   OPTIONS: {
     currency: 'INR',
-    name: 'GroupBuy',
+    name: import.meta.env.VITE_APP_NAME || 'GroupBuy',
     description: 'Group Buying Order Payment',
-    // Use absolute URL or remove image to avoid mixed content warnings
-    // image: undefined, // Remove or use: window.location.origin + '/logo.png'
     theme: {
       color: '#16a34a', // Green-600
       backdrop_color: 'rgba(0, 0, 0, 0.5)',

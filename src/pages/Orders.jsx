@@ -1,9 +1,10 @@
-// src/pages/Orders.jsx - Order History with Filters
+// src/pages/Orders.jsx - COMPLETE WITH COUNTDOWN TIMER
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { collection, query, where, getDocs, orderBy } from 'firebase/firestore';
 import { db } from '../config/firebase';
 import { useAuth } from '../contexts/AuthContext';
+import { CompactTimer } from '../components/CountdownTimer';
 import { 
   ShoppingBagIcon,
   ClockIcon,
@@ -13,7 +14,8 @@ import {
   CurrencyRupeeIcon,
   CalendarIcon,
   FunnelIcon,
-  MagnifyingGlassIcon
+  MagnifyingGlassIcon,
+  FireIcon
 } from '@heroicons/react/24/outline';
 import { SkeletonLoader } from '../components/LoadingSpinner';
 
@@ -277,6 +279,11 @@ export default function Orders() {
               const statusInfo = getStatusInfo(order.phase);
               const StatusIcon = statusInfo.icon;
 
+              // Determine if timer should show
+              const showTimer = 
+                (order.phase === 'collecting' && order.collectingEndsAt) ||
+                (order.phase === 'payment_window' && order.paymentWindowEndsAt);
+
               return (
                 <div
                   key={order.id}
@@ -286,8 +293,8 @@ export default function Orders() {
                   <div className="p-6">
                     <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-4">
                       {/* Order Info */}
-                      <div>
-                        <div className="flex items-center gap-3 mb-2">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-3 mb-2 flex-wrap">
                           <h3 className="text-lg font-bold text-gray-900">
                             Order #{order.id.slice(0, 12)}
                           </h3>
@@ -295,9 +302,21 @@ export default function Orders() {
                             <StatusIcon className="h-4 w-4" />
                             {statusInfo.label}
                           </span>
+
+                          {/* Compact Timer Badge */}
+                          {showTimer && (
+                            <CompactTimer 
+                              endTime={
+                                order.phase === 'collecting' 
+                                  ? order.collectingEndsAt 
+                                  : order.paymentWindowEndsAt
+                              }
+                              phase={order.phase}
+                            />
+                          )}
                         </div>
                         
-                        <div className="flex items-center gap-2 text-gray-600 text-sm">
+                        <div className="flex items-center gap-2 text-gray-600 text-sm flex-wrap">
                           <CalendarIcon className="h-4 w-4" />
                           <span>{formatDate(order.createdAt)}</span>
                           <span className="text-gray-400">•</span>
@@ -315,6 +334,20 @@ export default function Orders() {
                         </div>
                       </div>
                     </div>
+
+                    {/* Urgent Payment Warning */}
+                    {order.phase === 'payment_window' && 
+                     participation?.paymentStatus === 'pending' &&
+                     order.paymentWindowEndsAt && (
+                      <div className="mb-4 p-3 bg-orange-50 border-2 border-orange-300 rounded-xl animate-pulse">
+                        <div className="flex items-center gap-2 text-orange-800">
+                          <FireIcon className="h-5 w-5 animate-bounce" />
+                          <p className="font-bold text-sm">
+                            Payment required! Complete payment before time runs out.
+                          </p>
+                        </div>
+                      </div>
+                    )}
 
                     {/* Items Preview */}
                     <div className="border-t border-gray-200 pt-4">

@@ -1,4 +1,4 @@
-// src/pages/Cart.jsx - Enhanced with Collecting Phase Timer & Responsive Design
+// src/pages/Cart.jsx - WITH COUNTDOWN TIMER
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { collection, query, where, getDocs, doc, getDoc } from 'firebase/firestore';
@@ -6,6 +6,7 @@ import { db } from '../config/firebase';
 import { useCart } from '../contexts/CartContext';
 import { useAuth } from '../contexts/AuthContext';
 import { orderService } from '../services/groupService';
+import CountdownTimer from '../components/CountdownTimer'; // ADD THIS
 import { 
   ShoppingCartIcon, 
   TrashIcon, 
@@ -41,7 +42,6 @@ export default function Cart() {
   const [loadingGroups, setLoadingGroups] = useState(true);
   const [placingOrder, setPlacingOrder] = useState(false);
   const [activeOrderCycle, setActiveOrderCycle] = useState(null);
-  const [timeRemaining, setTimeRemaining] = useState(null);
 
   useEffect(() => {
     if (currentUser && userProfile) {
@@ -49,37 +49,11 @@ export default function Cart() {
     }
   }, [currentUser, userProfile]);
 
-  // Fetch active order cycle when group is selected
   useEffect(() => {
     if (selectedGroup) {
       fetchActiveOrderCycle();
     }
   }, [selectedGroup]);
-
-  // Update countdown timer
-  useEffect(() => {
-    if (!activeOrderCycle) return;
-
-    const interval = setInterval(() => {
-      const now = Date.now();
-      let targetTime;
-
-      if (activeOrderCycle.phase === 'collecting' && activeOrderCycle.collectingEndsAt) {
-        targetTime = activeOrderCycle.collectingEndsAt.toMillis();
-      }
-
-      if (targetTime) {
-        const diff = targetTime - now;
-        if (diff > 0) {
-          setTimeRemaining(diff);
-        } else {
-          setTimeRemaining(0);
-        }
-      }
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, [activeOrderCycle]);
 
   const fetchUserGroups = async () => {
     try {
@@ -130,22 +104,6 @@ export default function Cart() {
       }
     } catch (error) {
       console.error('Error fetching order cycle:', error);
-    }
-  };
-
-  const formatTimeRemaining = (ms) => {
-    if (!ms) return 'Calculating...';
-    
-    const hours = Math.floor(ms / (1000 * 60 * 60));
-    const minutes = Math.floor((ms % (1000 * 60 * 60)) / (1000 * 60));
-    const seconds = Math.floor((ms % (1000 * 60)) / 1000);
-    
-    if (hours > 0) {
-      return `${hours}h ${minutes}m ${seconds}s`;
-    } else if (minutes > 0) {
-      return `${minutes}m ${seconds}s`;
-    } else {
-      return `${seconds}s`;
     }
   };
 
@@ -213,6 +171,13 @@ export default function Cart() {
     setActiveOrderCycle(null);
   };
 
+  const handleTimerExpire = () => {
+    toast.error('Collection phase ended! This order cycle is now closed.', {
+      duration: 5000
+    });
+    fetchActiveOrderCycle(); // Refresh to get updated status
+  };
+
   if (cartItems.length === 0) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-gray-50 to-green-50 flex items-center justify-center px-4">
@@ -248,6 +213,19 @@ export default function Cart() {
             {cartItems.length} {cartItems.length === 1 ? 'item' : 'items'} in your cart
           </p>
         </div>
+
+        {/* TIMER - Show if there's an active collecting phase */}
+        {activeOrderCycle && activeOrderCycle.phase === 'collecting' && activeOrderCycle.collectingEndsAt && (
+          <div className="mb-6 sm:mb-8">
+            <CountdownTimer
+              endTime={activeOrderCycle.collectingEndsAt}
+              phase="collecting"
+              title="⏰ Collection Phase Ending"
+              size="medium"
+              onExpire={handleTimerExpire}
+            />
+          </div>
+        )}
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6 lg:gap-8">
           {/* Cart Items */}
@@ -347,20 +325,6 @@ export default function Cart() {
           {/* Order Summary - Sticky on mobile */}
           <div className="lg:col-span-1">
             <div className="bg-white rounded-xl sm:rounded-2xl shadow-lg sticky top-4">
-              {/* Collecting Phase Timer */}
-              {activeOrderCycle && activeOrderCycle.phase === 'collecting' && timeRemaining !== null && (
-                <div className="p-4 sm:p-6 bg-gradient-to-r from-orange-50 to-red-50 border-b-2 border-orange-200 rounded-t-xl sm:rounded-t-2xl">
-                  <div className="flex items-center gap-3">
-                    <ClockIcon className="h-6 w-6 sm:h-8 sm:w-8 text-orange-600 animate-pulse flex-shrink-0" />
-                    <div className="flex-1">
-                      <p className="text-xs sm:text-sm font-semibold text-orange-900">Collecting Phase Ends In:</p>
-                      <p className="text-lg sm:text-2xl font-bold text-orange-600">{formatTimeRemaining(timeRemaining)}</p>
-                      <p className="text-xs text-orange-700 mt-1">Place your order before time runs out!</p>
-                    </div>
-                  </div>
-                </div>
-              )}
-
               {/* Group Selection */}
               <div className="p-4 sm:p-6 border-b border-gray-200">
                 <h3 className="text-base sm:text-lg font-bold text-gray-900 mb-3 flex items-center gap-2">

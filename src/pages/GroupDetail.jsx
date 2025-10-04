@@ -1,4 +1,4 @@
-// src/pages/GroupDetail.jsx - Enhanced with Order Cycles
+// src/pages/GroupDetail.jsx - COMPLETE WITH COUNTDOWN TIMER
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { doc, getDoc, onSnapshot } from 'firebase/firestore';
@@ -6,7 +6,7 @@ import { db } from '../config/firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { orderService } from '../services/groupService';
 import { paymentService } from '../services/paymentService';
-import RazorpayButton from '../components/RazorpayButton';
+import CountdownTimer, { CompactTimer } from '../components/CountdownTimer';
 import { 
   UserGroupIcon,
   MapPinIcon,
@@ -18,7 +18,8 @@ import {
   ArrowLeftIcon,
   CurrencyRupeeIcon,
   TruckIcon,
-  XCircleIcon
+  XCircleIcon,
+  FireIcon
 } from '@heroicons/react/24/outline';
 import { ProgressBar } from '../components/LoadingSpinner';
 import toast from 'react-hot-toast';
@@ -31,7 +32,6 @@ export default function GroupDetail() {
   const [group, setGroup] = useState(null);
   const [orderCycle, setOrderCycle] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [timeRemaining, setTimeRemaining] = useState(null);
 
   useEffect(() => {
     if (groupId) {
@@ -64,33 +64,6 @@ export default function GroupDetail() {
 
     return () => unsubscribe();
   }, [groupId, group]);
-
-  // Update countdown timer
-  useEffect(() => {
-    if (!orderCycle) return;
-
-    const interval = setInterval(() => {
-      const now = Date.now();
-      let targetTime;
-
-      if (orderCycle.phase === 'collecting' && orderCycle.collectingEndsAt) {
-        targetTime = orderCycle.collectingEndsAt.toMillis();
-      } else if (orderCycle.phase === 'payment_window' && orderCycle.paymentWindowEndsAt) {
-        targetTime = orderCycle.paymentWindowEndsAt.toMillis();
-      }
-
-      if (targetTime) {
-        const diff = targetTime - now;
-        if (diff > 0) {
-          setTimeRemaining(diff);
-        } else {
-          setTimeRemaining(0);
-        }
-      }
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, [orderCycle]);
 
   const fetchGroupDetails = async () => {
     try {
@@ -135,19 +108,25 @@ export default function GroupDetail() {
     navigate('/products', { state: { fromGroup: true } });
   };
 
-  const formatTimeRemaining = (ms) => {
-    if (!ms) return 'Calculating...';
-    
-    const hours = Math.floor(ms / (1000 * 60 * 60));
-    const minutes = Math.floor((ms % (1000 * 60 * 60)) / (1000 * 60));
-    const seconds = Math.floor((ms % (1000 * 60)) / 1000);
-    
-    if (hours > 0) {
-      return `${hours}h ${minutes}m ${seconds}s`;
-    } else if (minutes > 0) {
-      return `${minutes}m ${seconds}s`;
-    } else {
-      return `${seconds}s`;
+  const handlePayment = async () => {
+    const participation = getUserParticipation();
+    if (!participation) return;
+
+    const paymentData = {
+      orderId: orderCycle.id,
+      groupId: groupId,
+      userId: currentUser.uid,
+      userName: userProfile.name,
+      userEmail: userProfile.email,
+      userPhone: userProfile.phone,
+      amount: participation.totalAmount
+    };
+
+    try {
+      await paymentService.initiatePayment(paymentData);
+    } catch (error) {
+      console.error('Payment error:', error);
+      toast.error('Failed to initiate payment');
     }
   };
 
@@ -199,26 +178,14 @@ export default function GroupDetail() {
     return orderCycle.participants?.find(p => p.userId === currentUser.uid);
   };
 
-  const handlePayment = async () => {
-    const participation = getUserParticipation();
-    if (!participation) return;
+  const handleTimerExpire = () => {
+    toast.error('Collection phase has ended!', { duration: 5000 });
+    fetchGroupDetails(); // Refresh data
+  };
 
-    const paymentData = {
-      orderId: orderCycle.id,
-      groupId: groupId,
-      userId: currentUser.uid,
-      userName: userProfile.name,
-      userEmail: userProfile.email,
-      userPhone: userProfile.phone,
-      amount: participation.totalAmount
-    };
-
-    try {
-      await paymentService.initiatePayment(paymentData);
-    } catch (error) {
-      console.error('Payment error:', error);
-      toast.error('Failed to initiate payment');
-    }
+  const handlePaymentTimerExpire = () => {
+    toast.error('Payment window has closed!', { duration: 5000 });
+    fetchGroupDetails(); // Refresh data
   };
 
   if (loading) {
@@ -303,38 +270,77 @@ export default function GroupDetail() {
           </div>
         </div>
 
+        {/* COUNTDOWN TIMER - Collecting Phase */}
+        {orderCycle && orderCycle.phase === 'collecting' && orderCycle.collectingEndsAt && (
+          <div className="mb-8">
+            <CountdownTimer
+              endTime={orderCycle.collectingEndsAt}
+              phase="collecting"
+              title="🛒 Order Collection Deadline"
+              size="large"
+              onExpire={handleTimerExpire}
+            />
+          </div>
+        )}
+
+        {/* COUNTDOWN TIMER - Payment Window */}
+        {orderCycle && orderCycle.phase === 'payment_window' && orderCycle.paymentWindowEndsAt && (
+          <div className="mb-8">
+            <CountdownTimer
+              endTime={orderCycle.paymentWindowEndsAt}
+              phase="payment_window"
+              title="💳 Payment Deadline"
+              size="large"
+              onExpire={handlePaymentTimerExpire}
+            />
+          </div>
+        )}
+
         {/* Order Cycle Status */}
         {orderCycle ? (
           <div className="space-y-6">
             {/* Phase Banner */}
-            <div className={`bg-gradient-to-r ${
-              phaseInfo.color === 'blue' ? 'from-blue-500 to-cyan-600' :
-              phaseInfo.color === 'yellow' ? 'from-yellow-500 to-orange-600' :
-              phaseInfo.color === 'green' ? 'from-green-500 to-emerald-600' :
-              phaseInfo.color === 'purple' ? 'from-purple-500 to-pink-600' :
-              'from-red-500 to-pink-600'
-            } text-white rounded-2xl shadow-lg p-6`}>
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-4">
-                  {PhaseIcon && (
-                    <div className="w-16 h-16 bg-white/20 backdrop-blur-sm rounded-xl flex items-center justify-center">
-                      <PhaseIcon className="h-8 w-8" />
+            {phaseInfo && (
+              <div className={`bg-gradient-to-r ${
+                phaseInfo.color === 'blue' ? 'from-blue-500 to-cyan-600' :
+                phaseInfo.color === 'yellow' ? 'from-yellow-500 to-orange-600' :
+                phaseInfo.color === 'green' ? 'from-green-500 to-emerald-600' :
+                phaseInfo.color === 'purple' ? 'from-purple-500 to-pink-600' :
+                'from-red-500 to-pink-600'
+              } text-white rounded-2xl shadow-lg p-6`}>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-4">
+                    {PhaseIcon && (
+                      <div className="w-16 h-16 bg-white/20 backdrop-blur-sm rounded-xl flex items-center justify-center">
+                        <PhaseIcon className="h-8 w-8" />
+                      </div>
+                    )}
+                    <div>
+                      <h2 className="text-2xl font-bold mb-1">{phaseInfo.title}</h2>
+                      <p className="text-white/90">{phaseInfo.description}</p>
+                    </div>
+                  </div>
+
+                  {/* Compact Timer Badge */}
+                  {orderCycle.phase === 'collecting' && orderCycle.collectingEndsAt && (
+                    <div className="hidden lg:block">
+                      <CompactTimer 
+                        endTime={orderCycle.collectingEndsAt}
+                        phase="collecting"
+                      />
                     </div>
                   )}
-                  <div>
-                    <h2 className="text-2xl font-bold mb-1">{phaseInfo.title}</h2>
-                    <p className="text-white/90">{phaseInfo.description}</p>
-                  </div>
+                  {orderCycle.phase === 'payment_window' && orderCycle.paymentWindowEndsAt && (
+                    <div className="hidden lg:block">
+                      <CompactTimer 
+                        endTime={orderCycle.paymentWindowEndsAt}
+                        phase="payment_window"
+                      />
+                    </div>
+                  )}
                 </div>
-
-                {timeRemaining !== null && (orderCycle.phase === 'collecting' || orderCycle.phase === 'payment_window') && (
-                  <div className="text-right">
-                    <div className="text-sm text-white/90 mb-1">Time Remaining</div>
-                    <div className="text-3xl font-bold">{formatTimeRemaining(timeRemaining)}</div>
-                  </div>
-                )}
               </div>
-            </div>
+            )}
 
             {/* User's Order Status */}
             {userParticipation && (
