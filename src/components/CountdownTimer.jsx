@@ -1,4 +1,4 @@
-// src/components/CountdownTimer.jsx - FIXED: No infinite toasts
+// src/components/CountdownTimer.jsx - FIXED: No repeated onExpire calls
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   ClockIcon, 
@@ -10,13 +10,14 @@ export default function CountdownTimer({
   endTime, 
   onExpire, 
   title = "Time Remaining",
-  phase = "collecting", // collecting, payment_window
-  size = "large" // small, medium, large
+  phase = "collecting",
+  size = "large"
 }) {
   const [timeLeft, setTimeLeft] = useState(null);
   const [isUrgent, setIsUrgent] = useState(false);
   const [hasExpired, setHasExpired] = useState(false);
   const expireCalledRef = useRef(false);
+  const intervalRef = useRef(null);
 
   useEffect(() => {
     if (!endTime) return;
@@ -29,12 +30,21 @@ export default function CountdownTimer({
       if (difference <= 0) {
         if (!hasExpired) {
           setHasExpired(true);
+          
           // Call onExpire only once using ref
           if (onExpire && !expireCalledRef.current) {
             expireCalledRef.current = true;
+            console.log('⏰ Timer expired - calling onExpire once');
             onExpire();
           }
         }
+        
+        // Stop the interval when expired
+        if (intervalRef.current) {
+          clearInterval(intervalRef.current);
+          intervalRef.current = null;
+        }
+        
         return { days: 0, hours: 0, minutes: 0, seconds: 0, total: 0 };
       }
 
@@ -54,11 +64,23 @@ export default function CountdownTimer({
     setTimeLeft(calculateTimeLeft());
 
     // Update every second
-    const timer = setInterval(() => {
-      setTimeLeft(calculateTimeLeft());
+    intervalRef.current = setInterval(() => {
+      const newTimeLeft = calculateTimeLeft();
+      setTimeLeft(newTimeLeft);
+      
+      // If expired, stop interval
+      if (newTimeLeft.total <= 0 && intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
     }, 1000);
 
-    return () => clearInterval(timer);
+    return () => {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+    };
   }, [endTime, onExpire, hasExpired]);
 
   // Reset states when endTime changes
@@ -98,7 +120,6 @@ export default function CountdownTimer({
       };
     }
     
-    // collecting phase
     return {
       bgGradient: isUrgent ? 'from-orange-500 to-red-600' : 'from-blue-500 to-cyan-600',
       iconBg: isUrgent ? 'bg-orange-600' : 'bg-blue-600',
@@ -111,7 +132,6 @@ export default function CountdownTimer({
   const config = getPhaseConfig();
   const Icon = config.icon;
 
-  // Size configurations
   const sizeClasses = {
     small: {
       container: 'p-3 sm:p-4',
@@ -163,7 +183,6 @@ export default function CountdownTimer({
 
         {/* Countdown Display */}
         <div className="grid grid-cols-4 gap-2 sm:gap-4">
-          {/* Days */}
           {timeLeft.days > 0 && (
             <TimeUnit 
               value={timeLeft.days} 
@@ -173,7 +192,6 @@ export default function CountdownTimer({
             />
           )}
           
-          {/* Hours */}
           <TimeUnit 
             value={timeLeft.hours} 
             label="Hours" 
@@ -181,7 +199,6 @@ export default function CountdownTimer({
             isUrgent={isUrgent}
           />
           
-          {/* Minutes */}
           <TimeUnit 
             value={timeLeft.minutes} 
             label="Minutes" 
@@ -189,7 +206,6 @@ export default function CountdownTimer({
             isUrgent={isUrgent}
           />
           
-          {/* Seconds */}
           <TimeUnit 
             value={timeLeft.seconds} 
             label="Seconds" 
@@ -226,7 +242,6 @@ export default function CountdownTimer({
   );
 }
 
-// Time Unit Component
 function TimeUnit({ value, label, classes, isUrgent }) {
   return (
     <div className={`bg-white/10 backdrop-blur-sm rounded-xl p-2 sm:p-3 text-center border border-white/20 ${isUrgent ? 'border-white/40' : ''}`}>
@@ -240,10 +255,10 @@ function TimeUnit({ value, label, classes, isUrgent }) {
   );
 }
 
-// Compact Timer Variant
 export function CompactTimer({ endTime, phase = "collecting" }) {
   const [timeLeft, setTimeLeft] = useState(null);
   const [hasExpired, setHasExpired] = useState(false);
+  const intervalRef = useRef(null);
 
   useEffect(() => {
     if (!endTime) return;
@@ -255,6 +270,13 @@ export function CompactTimer({ endTime, phase = "collecting" }) {
 
       if (difference <= 0) {
         setHasExpired(true);
+        
+        // Stop interval when expired
+        if (intervalRef.current) {
+          clearInterval(intervalRef.current);
+          intervalRef.current = null;
+        }
+        
         return { hours: 0, minutes: 0, seconds: 0, expired: true };
       }
 
@@ -268,14 +290,25 @@ export function CompactTimer({ endTime, phase = "collecting" }) {
 
     setTimeLeft(calculateTimeLeft());
 
-    const timer = setInterval(() => {
-      setTimeLeft(calculateTimeLeft());
+    intervalRef.current = setInterval(() => {
+      const newTimeLeft = calculateTimeLeft();
+      setTimeLeft(newTimeLeft);
+      
+      // Stop interval when expired
+      if (newTimeLeft.expired && intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
     }, 1000);
 
-    return () => clearInterval(timer);
+    return () => {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+    };
   }, [endTime]);
 
-  // Reset when endTime changes
   useEffect(() => {
     setHasExpired(false);
   }, [endTime]);

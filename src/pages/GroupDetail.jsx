@@ -1,7 +1,7 @@
-// src/pages/GroupDetail.jsx - FIXED: No infinite toasts
+// src/pages/GroupDetail.jsx - FIXED: No infinite timer loop
 import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { doc, getDoc, onSnapshot } from 'firebase/firestore';
+import { doc, getDoc, onSnapshot, collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../config/firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { orderService } from '../services/groupService';
@@ -19,7 +19,9 @@ import {
   CurrencyRupeeIcon,
   TruckIcon,
   XCircleIcon,
-  FireIcon
+  FireIcon,
+  PlusIcon,
+  ExclamationCircleIcon
 } from '@heroicons/react/24/outline';
 import { ProgressBar } from '../components/LoadingSpinner';
 import toast from 'react-hot-toast';
@@ -32,7 +34,10 @@ export default function GroupDetail() {
   const [group, setGroup] = useState(null);
   const [orderCycle, setOrderCycle] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [availableProducts, setAvailableProducts] = useState([]);
   const previousPhaseRef = useRef(null);
+  const timerExpiredRef = useRef(false); // Track if timer already expired
+  const currentCycleIdRef = useRef(null); // Track current cycle ID
 
   useEffect(() => {
     if (groupId) {
@@ -40,7 +45,7 @@ export default function GroupDetail() {
     }
   }, [groupId]);
 
-  // Subscribe to order cycle updates
+  // Subscribe to real-time updates
   useEffect(() => {
     if (!groupId || !group) return;
 
@@ -56,6 +61,12 @@ export default function GroupDetail() {
             if (cycleDoc.exists()) {
               const newCycleData = { id: cycleDoc.id, ...cycleDoc.data() };
               
+              // Reset timer expired flag if cycle changed
+              if (currentCycleIdRef.current !== newCycleData.id) {
+                timerExpiredRef.current = false;
+                currentCycleIdRef.current = newCycleData.id;
+              }
+              
               // Check if phase changed
               if (previousPhaseRef.current && previousPhaseRef.current !== newCycleData.phase) {
                 handlePhaseChange(previousPhaseRef.current, newCycleData.phase);
@@ -67,6 +78,8 @@ export default function GroupDetail() {
           } else {
             setOrderCycle(null);
             previousPhaseRef.current = null;
+            timerExpiredRef.current = false;
+            currentCycleIdRef.current = null;
           }
         }
       }
@@ -74,6 +87,13 @@ export default function GroupDetail() {
 
     return () => unsubscribe();
   }, [groupId, group]);
+
+  // Fetch available products for new orders
+  useEffect(() => {
+    if (orderCycle && orderCycle.phase === 'collecting') {
+      fetchAvailableProducts();
+    }
+  }, [orderCycle]);
 
   const fetchGroupDetails = async () => {
     try {
@@ -99,6 +119,7 @@ export default function GroupDetail() {
           if (cycleDoc.exists()) {
             const cycleData = { id: cycleDoc.id, ...cycleDoc.data() };
             previousPhaseRef.current = cycleData.phase;
+            currentCycleIdRef.current = cycleData.id;
             setOrderCycle(cycleData);
           }
         }
@@ -114,10 +135,29 @@ export default function GroupDetail() {
     }
   };
 
+  const fetchAvailableProducts = async () => {
+    try {
+      const productsQuery = query(
+        collection(db, 'products'),
+        where('isActive', '==', true)
+      );
+      const snapshot = await getDocs(productsQuery);
+      const products = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      setAvailableProducts(products);
+    } catch (error) {
+      console.error('Error fetching products:', error);
+    }
+  };
+
   const handlePhaseChange = (oldPhase, newPhase) => {
     console.log(`📌 Phase changed: ${oldPhase} → ${newPhase}`);
     
-    // Show appropriate message based on phase transition
+    // Reset timer expired flag on phase change
+    timerExpiredRef.current = false;
+    
     if (oldPhase === 'collecting' && newPhase === 'payment_window') {
       toast.success('Payment window is now open! Complete your payment.', {
         duration: 6000,
@@ -150,14 +190,21 @@ export default function GroupDetail() {
   };
 
   const handleStartShopping = () => {
-    // Store selected group in localStorage for cart
     localStorage.setItem('selectedGroupId', groupId);
     navigate('/products', { state: { fromGroup: true } });
   };
 
   const handlePayment = async () => {
     const participation = getUserParticipation();
-    if (!participation) return;
+    if (!participation) {
+      toast.error('You have not placed an order in this cycle');
+      return;
+    }
+
+    if (participation.paymentStatus === 'paid') {
+      toast.success('You have already paid for this order');
+      return;
+    }
 
     const paymentData = {
       orderId: orderCycle.id,
@@ -225,10 +272,29 @@ export default function GroupDetail() {
     return orderCycle.participants?.find(p => p.userId === currentUser.uid);
   };
 
+  const isUserParticipating = () => {
+    return getUserParticipation() !== null;
+  };
+
+  const canAddToOrder = () => {
+    return orderCycle && orderCycle.phase === 'collecting';
+  };
+
   const handleTimerExpire = () => {
-    // Timer expired - just log, don't show toast
-    // The phase change handler will show appropriate message
-    console.log('⏰ Timer expired - waiting for phase update');
+    // Prevent multiple calls using ref
+    if (timerExpiredRef.current) {
+      return;
+    }
+    
+    timerExpiredRef.current = true;
+    console.log('⏰ Timer expired - phase will update automatically via real-time listener');
+    
+    // Don't call fetchGroupDetails - real-time listener will handle updates
+    // Just show a message to the user
+    toast.info('Time expired. Waiting for phase update...', {
+      duration: 3000,
+      icon: '⏰'
+    });
   };
 
   if (loading) {
@@ -247,6 +313,7 @@ export default function GroupDetail() {
   const phaseInfo = orderCycle ? getPhaseInfo(orderCycle.phase) : null;
   const PhaseIcon = phaseInfo?.icon;
   const userParticipation = getUserParticipation();
+  const userIsParticipating = isUserParticipating();
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-green-50 py-8">
@@ -313,35 +380,31 @@ export default function GroupDetail() {
           </div>
         </div>
 
-        {/* COUNTDOWN TIMER - Collecting Phase */}
-        {orderCycle && orderCycle.phase === 'collecting' && orderCycle.collectingEndsAt && (
-          <div className="mb-8">
-            <CountdownTimer
-              endTime={orderCycle.collectingEndsAt}
-              phase="collecting"
-              title="🛒 Order Collection Deadline"
-              size="large"
-              onExpire={handleTimerExpire}
-            />
-          </div>
-        )}
-
-        {/* COUNTDOWN TIMER - Payment Window */}
-        {orderCycle && orderCycle.phase === 'payment_window' && orderCycle.paymentWindowEndsAt && (
-          <div className="mb-8">
-            <CountdownTimer
-              endTime={orderCycle.paymentWindowEndsAt}
-              phase="payment_window"
-              title="💳 Payment Deadline"
-              size="large"
-              onExpire={handleTimerExpire}
-            />
-          </div>
-        )}
-
-        {/* Order Cycle Status */}
+        {/* Order Cycle Section */}
         {orderCycle ? (
           <div className="space-y-6">
+            {/* COUNTDOWN TIMER - Collecting Phase */}
+            {orderCycle.phase === 'collecting' && orderCycle.collectingEndsAt && (
+              <CountdownTimer
+                endTime={orderCycle.collectingEndsAt}
+                phase="collecting"
+                title="🛒 Order Collection Deadline"
+                size="large"
+                onExpire={handleTimerExpire}
+              />
+            )}
+
+            {/* COUNTDOWN TIMER - Payment Window */}
+            {orderCycle.phase === 'payment_window' && orderCycle.paymentWindowEndsAt && (
+              <CountdownTimer
+                endTime={orderCycle.paymentWindowEndsAt}
+                phase="payment_window"
+                title="💳 Payment Deadline"
+                size="large"
+                onExpire={handleTimerExpire}
+              />
+            )}
+
             {/* Phase Banner */}
             {phaseInfo && (
               <div className={`bg-gradient-to-r ${
@@ -351,7 +414,7 @@ export default function GroupDetail() {
                 phaseInfo.color === 'purple' ? 'from-purple-500 to-pink-600' :
                 'from-red-500 to-pink-600'
               } text-white rounded-2xl shadow-lg p-6`}>
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between flex-wrap gap-4">
                   <div className="flex items-center gap-4">
                     {PhaseIcon && (
                       <div className="w-16 h-16 bg-white/20 backdrop-blur-sm rounded-xl flex items-center justify-center">
@@ -364,28 +427,67 @@ export default function GroupDetail() {
                     </div>
                   </div>
 
-                  {/* Compact Timer Badge */}
-                  {orderCycle.phase === 'collecting' && orderCycle.collectingEndsAt && (
-                    <div className="hidden lg:block">
-                      <CompactTimer 
-                        endTime={orderCycle.collectingEndsAt}
-                        phase="collecting"
-                      />
-                    </div>
-                  )}
-                  {orderCycle.phase === 'payment_window' && orderCycle.paymentWindowEndsAt && (
-                    <div className="hidden lg:block">
-                      <CompactTimer 
-                        endTime={orderCycle.paymentWindowEndsAt}
-                        phase="payment_window"
-                      />
-                    </div>
+                  {/* Action Buttons */}
+                  {orderCycle.phase === 'collecting' && (
+                    <button
+                      onClick={handleStartShopping}
+                      className="px-6 py-3 bg-white text-green-600 rounded-xl font-bold hover:shadow-xl transition-all flex items-center gap-2"
+                    >
+                      {userIsParticipating ? (
+                        <>
+                          <PlusIcon className="h-5 w-5" />
+                          <span>Add More Items</span>
+                        </>
+                      ) : (
+                        <>
+                          <ShoppingBagIcon className="h-5 w-5" />
+                          <span>Start Shopping</span>
+                        </>
+                      )}
+                    </button>
                   )}
                 </div>
               </div>
             )}
 
-            {/* User's Order Status */}
+            {/* New Member Info - Not Participating Yet */}
+            {!userIsParticipating && orderCycle.phase === 'collecting' && (
+              <div className="bg-blue-50 border-2 border-blue-300 rounded-2xl p-6">
+                <div className="flex items-start gap-4">
+                  <div className="w-12 h-12 bg-blue-600 rounded-xl flex items-center justify-center flex-shrink-0">
+                    <ExclamationCircleIcon className="h-6 w-6 text-white" />
+                  </div>
+                  <div className="flex-1">
+                    <h3 className="text-xl font-bold text-blue-900 mb-2">
+                      Welcome to the Group! 🎉
+                    </h3>
+                    <p className="text-blue-800 mb-4">
+                      An active order cycle is currently running. You can join this cycle by adding items to your cart and placing an order before the collection phase ends.
+                    </p>
+                    <div className="flex flex-wrap gap-3">
+                      <button
+                        onClick={handleStartShopping}
+                        className="px-6 py-3 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition-colors flex items-center gap-2"
+                      >
+                        <ShoppingBagIcon className="h-5 w-5" />
+                        <span>Browse Products & Join</span>
+                      </button>
+                      <button
+                        onClick={() => {
+                          const detailsSection = document.getElementById('cycle-details');
+                          detailsSection?.scrollIntoView({ behavior: 'smooth' });
+                        }}
+                        className="px-6 py-3 bg-white text-blue-600 border-2 border-blue-300 rounded-xl font-bold hover:bg-blue-50 transition-colors"
+                      >
+                        View Order Details
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* User's Order Status - Only if participating */}
             {userParticipation && (
               <div className="bg-white rounded-2xl shadow-lg p-6">
                 <h3 className="text-xl font-bold text-gray-900 mb-4">Your Order</h3>
@@ -444,87 +546,96 @@ export default function GroupDetail() {
               </div>
             )}
 
-            {/* Product Progress */}
-            {orderCycle.productOrders && Object.keys(orderCycle.productOrders).length > 0 && (
-              <div className="bg-white rounded-2xl shadow-lg p-6">
-                <h3 className="text-xl font-bold text-gray-900 mb-4">Product Progress</h3>
-                
-                <div className="space-y-4">
-                  {Object.values(orderCycle.productOrders).map((product, index) => {
-                    const progress = Math.min((product.quantity / product.minQuantity) * 100, 100);
-                    
-                    return (
-                      <div key={index} className="border border-gray-200 rounded-xl p-4">
-                        <div className="flex items-start justify-between mb-3">
-                          <div>
-                            <h4 className="font-semibold text-gray-900 mb-1">{product.name}</h4>
-                            <div className="text-sm text-gray-600">
-                              {product.quantity} / {product.minQuantity} units
+            {/* Order Cycle Details */}
+            <div id="cycle-details" className="space-y-6">
+              {/* Product Progress */}
+              {orderCycle.productOrders && Object.keys(orderCycle.productOrders).length > 0 && (
+                <div className="bg-white rounded-2xl shadow-lg p-6">
+                  <h3 className="text-xl font-bold text-gray-900 mb-4">Product Progress</h3>
+                  
+                  <div className="space-y-4">
+                    {Object.values(orderCycle.productOrders).map((product, index) => {
+                      const progress = Math.min((product.quantity / product.minQuantity) * 100, 100);
+                      
+                      return (
+                        <div key={index} className="border border-gray-200 rounded-xl p-4">
+                          <div className="flex items-start justify-between mb-3">
+                            <div>
+                              <h4 className="font-semibold text-gray-900 mb-1">{product.name}</h4>
+                              <div className="text-sm text-gray-600">
+                                {product.quantity} / {product.minQuantity} units
+                              </div>
                             </div>
+                            {product.metMinimum ? (
+                              <span className="flex items-center gap-1 px-3 py-1 bg-green-100 text-green-800 rounded-full text-sm font-medium">
+                                <CheckCircleIcon className="h-4 w-4" />
+                                <span>Goal Met!</span>
+                              </span>
+                            ) : (
+                              <span className="px-3 py-1 bg-gray-100 text-gray-600 rounded-full text-sm font-medium">
+                                {product.minQuantity - product.quantity} more needed
+                              </span>
+                            )}
                           </div>
-                          {product.metMinimum ? (
-                            <span className="flex items-center gap-1 px-3 py-1 bg-green-100 text-green-800 rounded-full text-sm font-medium">
-                              <CheckCircleIcon className="h-4 w-4" />
-                              <span>Goal Met!</span>
-                            </span>
-                          ) : (
-                            <span className="px-3 py-1 bg-gray-100 text-gray-600 rounded-full text-sm font-medium">
-                              {product.minQuantity - product.quantity} more needed
-                            </span>
-                          )}
+                          
+                          <ProgressBar
+                            progress={progress}
+                            color={product.metMinimum ? 'green' : 'blue'}
+                            showPercentage={false}
+                          />
                         </div>
-                        
-                        <ProgressBar
-                          progress={progress}
-                          color={product.metMinimum ? 'green' : 'blue'}
-                          showPercentage={false}
-                        />
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-
-            {/* All Participants */}
-            <div className="bg-white rounded-2xl shadow-lg p-6">
-              <h3 className="text-xl font-bold text-gray-900 mb-4">
-                Participants ({orderCycle.totalParticipants || 0})
-              </h3>
-              
-              <div className="space-y-3">
-                {orderCycle.participants?.map((participant, index) => (
-                  <div key={index} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 bg-gradient-to-br from-green-600 to-emerald-600 rounded-full flex items-center justify-center text-white font-bold">
-                        {participant.userName.charAt(0).toUpperCase()}
-                      </div>
-                      <div>
-                        <div className="font-medium text-gray-900">{participant.userName}</div>
-                        <div className="text-sm text-gray-600">
-                          {participant.items?.length} items • ₹{participant.totalAmount?.toLocaleString()}
-                        </div>
-                      </div>
-                    </div>
-                    
-                    <div className="flex items-center gap-2">
-                      {participant.paymentStatus === 'paid' ? (
-                        <span className="flex items-center gap-1 px-3 py-1 bg-green-100 text-green-800 rounded-full text-sm font-medium">
-                          <CheckCircleIcon className="h-4 w-4" />
-                          <span>Paid</span>
-                        </span>
-                      ) : (
-                        <span className="px-3 py-1 bg-yellow-100 text-yellow-800 rounded-full text-sm font-medium">
-                          Pending
-                        </span>
-                      )}
-                    </div>
+                      );
+                    })}
                   </div>
-                ))}
+                </div>
+              )}
+
+              {/* All Participants */}
+              <div className="bg-white rounded-2xl shadow-lg p-6">
+                <h3 className="text-xl font-bold text-gray-900 mb-4">
+                  Participants ({orderCycle.totalParticipants || 0})
+                </h3>
+                
+                <div className="space-y-3">
+                  {orderCycle.participants?.map((participant, index) => (
+                    <div key={index} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 bg-gradient-to-br from-green-600 to-emerald-600 rounded-full flex items-center justify-center text-white font-bold">
+                          {participant.userName.charAt(0).toUpperCase()}
+                        </div>
+                        <div>
+                          <div className="font-medium text-gray-900">
+                            {participant.userName}
+                            {participant.userId === currentUser.uid && (
+                              <span className="ml-2 text-sm text-blue-600 font-semibold">(You)</span>
+                            )}
+                          </div>
+                          <div className="text-sm text-gray-600">
+                            {participant.items?.length} items • ₹{participant.totalAmount?.toLocaleString()}
+                          </div>
+                        </div>
+                      </div>
+                      
+                      <div className="flex items-center gap-2">
+                        {participant.paymentStatus === 'paid' ? (
+                          <span className="flex items-center gap-1 px-3 py-1 bg-green-100 text-green-800 rounded-full text-sm font-medium">
+                            <CheckCircleIcon className="h-4 w-4" />
+                            <span>Paid</span>
+                          </span>
+                        ) : (
+                          <span className="px-3 py-1 bg-yellow-100 text-yellow-800 rounded-full text-sm font-medium">
+                            Pending
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
           </div>
         ) : (
+          // No Active Order Cycle
           <div className="bg-white rounded-2xl shadow-lg p-12 text-center">
             <ShoppingBagIcon className="h-16 w-16 text-gray-300 mx-auto mb-4" />
             <h3 className="text-xl font-bold text-gray-900 mb-2">No Active Order Cycle</h3>
