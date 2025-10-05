@@ -3,7 +3,7 @@ import { loadRazorpayScript } from '../config/razorpay';
 import toast from 'react-hot-toast';
 
 // Backend API URL
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+const API_URL = import.meta.env.VITE_API_URL || 'https://backend-ez2q.onrender.com/api';
 
 export const paymentService = {
   /**
@@ -28,12 +28,17 @@ export const paymentService = {
         throw new Error('Failed to load payment gateway');
       }
 
+      console.log('📤 Creating order via backend:', `${API_URL}/payment/create-order`);
+
       // Create order via backend API
       const orderResponse = await fetch(`${API_URL}/payment/create-order`, {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
         },
+        mode: 'cors',
+        credentials: 'omit',
         body: JSON.stringify({
           amount: orderData.amount,
           currency: 'INR',
@@ -47,9 +52,17 @@ export const paymentService = {
         })
       });
 
+      console.log('📥 Order response status:', orderResponse.status);
+
       if (!orderResponse.ok) {
-        const error = await orderResponse.json();
-        throw new Error(error.error || 'Failed to create order');
+        let errorMessage = 'Failed to create order';
+        try {
+          const error = await orderResponse.json();
+          errorMessage = error.error || errorMessage;
+        } catch (e) {
+          console.error('Could not parse error response:', e);
+        }
+        throw new Error(errorMessage);
       }
 
       const { order } = await orderResponse.json();
@@ -113,8 +126,11 @@ export const paymentService = {
       const verifyResponse = await fetch(`${API_URL}/payment/verify`, {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
         },
+        mode: 'cors',
+        credentials: 'omit',
         body: JSON.stringify({
           razorpay_order_id: response.razorpay_order_id,
           razorpay_payment_id: response.razorpay_payment_id,
@@ -125,8 +141,14 @@ export const paymentService = {
       });
 
       if (!verifyResponse.ok) {
-        const error = await verifyResponse.json();
-        throw new Error(error.error || 'Payment verification failed');
+        let errorMessage = 'Payment verification failed';
+        try {
+          const error = await verifyResponse.json();
+          errorMessage = error.error || errorMessage;
+        } catch (e) {
+          console.error('Could not parse error response:', e);
+        }
+        throw new Error(errorMessage);
       }
 
       const result = await verifyResponse.json();
@@ -200,8 +222,11 @@ export const paymentService = {
       const response = await fetch(`${API_URL}/payment/refund`, {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
         },
+        mode: 'cors',
+        credentials: 'omit',
         body: JSON.stringify({
           paymentId,
           amount,
@@ -236,8 +261,11 @@ export const paymentService = {
       const response = await fetch(`${API_URL}/payment/cancel`, {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
         },
+        mode: 'cors',
+        credentials: 'omit',
         body: JSON.stringify({ paymentId })
       });
 
@@ -265,7 +293,14 @@ export const paymentService = {
    */
   async fetchPaymentDetails(paymentId) {
     try {
-      const response = await fetch(`${API_URL}/payment/${paymentId}`);
+      const response = await fetch(`${API_URL}/payment/${paymentId}`, {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/json'
+        },
+        mode: 'cors',
+        credentials: 'omit'
+      });
 
       if (!response.ok) {
         const error = await response.json();
@@ -286,7 +321,14 @@ export const paymentService = {
    */
   async fetchRefundStatus(refundId) {
     try {
-      const response = await fetch(`${API_URL}/payment/refund/${refundId}`);
+      const response = await fetch(`${API_URL}/payment/refund/${refundId}`, {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/json'
+        },
+        mode: 'cors',
+        credentials: 'omit'
+      });
 
       if (!response.ok) {
         const error = await response.json();

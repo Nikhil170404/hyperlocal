@@ -1,6 +1,6 @@
-// src/pages/AdminDashboard.jsx - COMPLETE with Product Management
+// src/pages/AdminDashboard.jsx - COMPLETE with All Management Features
 import React, { useState, useEffect } from 'react';
-import { collection, getDocs, query, where, orderBy, updateDoc, doc, addDoc, deleteDoc } from 'firebase/firestore';
+import { collection, getDocs, query, where, orderBy, updateDoc, doc, addDoc, deleteDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../config/firebase';
 import { useAuth } from '../contexts/AuthContext';
 import DataUploadAdmin from '../components/DataUploadAdmin';
@@ -8,7 +8,8 @@ import {
   ChartBarIcon, UserGroupIcon, ShoppingBagIcon, TruckIcon, CheckCircleIcon,
   ClockIcon, XCircleIcon, MagnifyingGlassIcon, FunnelIcon, DocumentTextIcon,
   QrCodeIcon, PrinterIcon, PlusIcon, MapPinIcon, UsersIcon, TrashIcon,
-  PencilIcon, CubeIcon, TagIcon, SparklesIcon
+  PencilIcon, CubeIcon, TagIcon, SparklesIcon, CurrencyRupeeIcon,
+  ExclamationTriangleIcon, FireIcon, ArrowPathIcon
 } from '@heroicons/react/24/outline';
 import toast from 'react-hot-toast';
 
@@ -30,6 +31,7 @@ export default function AdminDashboard() {
   const [allGroups, setAllGroups] = useState([]);
   const [showCreateGroup, setShowCreateGroup] = useState(false);
   const [creatingGroup, setCreatingGroup] = useState(false);
+  const [editingGroup, setEditingGroup] = useState(null);
   const [newGroup, setNewGroup] = useState({
     name: '',
     city: '',
@@ -122,7 +124,7 @@ export default function AdminDashboard() {
     }
   };
 
-  // GROUP MANAGEMENT
+  // ==================== GROUP MANAGEMENT ====================
   const handleCreateGroup = async (e) => {
     e.preventDefault();
     setCreatingGroup(true);
@@ -144,8 +146,8 @@ export default function AdminDashboard() {
           totalMembers: 1,
           totalSavings: 0
         },
-        createdAt: new Date(),
-        updatedAt: new Date()
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
       };
 
       await addDoc(collection(db, 'groups'), groupData);
@@ -169,15 +171,74 @@ export default function AdminDashboard() {
     }
   };
 
-  const handleDeleteGroup = async (groupId) => {
-    if (!window.confirm('Are you sure you want to delete this group?')) return;
+  const handleEditGroup = (group) => {
+    setEditingGroup(group);
+    setNewGroup({
+      name: group.name,
+      city: group.area?.city || '',
+      pincode: group.area?.pincode || '',
+      maxMembers: group.maxMembers || 100,
+      category: group.category || 'groceries'
+    });
+    setShowCreateGroup(true);
+  };
+
+  const handleUpdateGroup = async (e) => {
+    e.preventDefault();
+    setCreatingGroup(true);
 
     try {
-      await updateDoc(doc(db, 'groups', groupId), {
-        isActive: false,
-        updatedAt: new Date()
+      await updateDoc(doc(db, 'groups', editingGroup.id), {
+        name: newGroup.name,
+        area: {
+          city: newGroup.city,
+          pincode: newGroup.pincode
+        },
+        maxMembers: parseInt(newGroup.maxMembers),
+        category: newGroup.category,
+        updatedAt: serverTimestamp()
       });
       
+      toast.success('Group updated successfully!');
+      setShowCreateGroup(false);
+      setEditingGroup(null);
+      setNewGroup({
+        name: '',
+        city: '',
+        pincode: '',
+        maxMembers: 100,
+        category: 'groceries'
+      });
+      
+      await fetchDashboardData();
+    } catch (error) {
+      console.error('Error updating group:', error);
+      toast.error('Failed to update group');
+    } finally {
+      setCreatingGroup(false);
+    }
+  };
+
+  const handleToggleGroupStatus = async (groupId, currentStatus) => {
+    try {
+      await updateDoc(doc(db, 'groups', groupId), {
+        isActive: !currentStatus,
+        updatedAt: serverTimestamp()
+      });
+      
+      toast.success(`Group ${!currentStatus ? 'activated' : 'deactivated'}`);
+      await fetchDashboardData();
+    } catch (error) {
+      console.error('Error toggling group status:', error);
+      toast.error('Failed to update group status');
+    }
+  };
+
+  const handleDeleteGroup = async (groupId) => {
+    if (!window.confirm('Are you sure you want to delete this group? This action cannot be undone.')) return;
+
+    try {
+      await deleteDoc(doc(db, 'groups', groupId));
       toast.success('Group deleted successfully');
       await fetchDashboardData();
     } catch (error) {
@@ -186,7 +247,7 @@ export default function AdminDashboard() {
     }
   };
 
-  // PRODUCT MANAGEMENT
+  // ==================== PRODUCT MANAGEMENT ====================
   const handleCreateProduct = async (e) => {
     e.preventDefault();
     setCreatingProduct(true);
@@ -197,8 +258,8 @@ export default function AdminDashboard() {
         retailPrice: parseFloat(newProduct.retailPrice),
         groupPrice: parseFloat(newProduct.groupPrice),
         minQuantity: parseInt(newProduct.minQuantity),
-        createdAt: new Date(),
-        updatedAt: new Date(),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
         views: 0,
         favorites: 0,
         sales: 0
@@ -253,7 +314,7 @@ export default function AdminDashboard() {
         retailPrice: parseFloat(newProduct.retailPrice),
         groupPrice: parseFloat(newProduct.groupPrice),
         minQuantity: parseInt(newProduct.minQuantity),
-        updatedAt: new Date()
+        updatedAt: serverTimestamp()
       };
 
       await updateDoc(doc(db, 'products', editingProduct.id), productData);
@@ -298,7 +359,7 @@ export default function AdminDashboard() {
     try {
       await updateDoc(doc(db, 'products', productId), {
         isActive: !currentStatus,
-        updatedAt: new Date()
+        updatedAt: serverTimestamp()
       });
       
       toast.success(`Product ${!currentStatus ? 'activated' : 'deactivated'}`);
@@ -309,12 +370,12 @@ export default function AdminDashboard() {
     }
   };
 
-  // ORDER MANAGEMENT
+  // ==================== ORDER MANAGEMENT ====================
   const updateOrderCycleStatus = async (cycleId, newPhase) => {
     try {
       await updateDoc(doc(db, 'orderCycles', cycleId), {
         phase: newPhase,
-        updatedAt: new Date()
+        updatedAt: serverTimestamp()
       });
       
       toast.success(`Order cycle updated to ${newPhase}`);
@@ -327,16 +388,14 @@ export default function AdminDashboard() {
 
   const markAsDelivered = async (cycleId, userId) => {
     try {
-      const cycleRef = doc(db, 'orderCycles', cycleId);
       const cycle = orderCycles.find(c => c.id === cycleId);
-      
       const updatedParticipants = cycle.participants.map(p =>
-        p.userId === userId ? { ...p, orderStatus: 'delivered', deliveredAt: new Date() } : p
+        p.userId === userId ? { ...p, orderStatus: 'delivered', deliveredAt: serverTimestamp() } : p
       );
 
-      await updateDoc(cycleRef, {
+      await updateDoc(doc(db, 'orderCycles', cycleId), {
         participants: updatedParticipants,
-        updatedAt: new Date()
+        updatedAt: serverTimestamp()
       });
 
       toast.success('Marked as delivered');
@@ -351,8 +410,8 @@ export default function AdminDashboard() {
     if (!cycle) return;
 
     const packingList = {};
-    cycle.participants.forEach(participant => {
-      participant.items.forEach(item => {
+    cycle.participants?.forEach(participant => {
+      participant.items?.forEach(item => {
         if (!packingList[item.id]) {
           packingList[item.id] = {
             name: item.name,
@@ -442,6 +501,11 @@ export default function AdminDashboard() {
 
   const filteredProducts = allProducts.filter(product =>
     product.name.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
+  const filteredGroups = allGroups.filter(group =>
+    group.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    group.area?.city?.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
   const statCards = [
@@ -596,6 +660,163 @@ export default function AdminDashboard() {
                 ))}
               </div>
             </div>
+          </div>
+        )}
+
+        {/* Orders Tab */}
+        {activeTab === 'orders' && (
+          <div className="space-y-6 animate-fade-in">
+            <div className="flex items-center justify-between">
+              <h2 className="text-2xl font-bold text-gray-900">Order Management</h2>
+              <button
+                onClick={() => fetchDashboardData()}
+                className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+              >
+                <ArrowPathIcon className="h-5 w-5" />
+                <span>Refresh</span>
+              </button>
+            </div>
+
+            {/* Search and Filters */}
+            <div className="flex flex-col sm:flex-row gap-4">
+              <div className="flex-1 relative">
+                <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
+                <input
+                  type="text"
+                  placeholder="Search by order ID..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="w-full pl-10 pr-4 py-3 border-2 border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-green-500"
+                />
+              </div>
+              <select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+                className="px-4 py-3 border-2 border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-green-500 bg-white"
+              >
+                <option value="all">All Statuses</option>
+                <option value="collecting">Collecting</option>
+                <option value="payment_window">Payment Window</option>
+                <option value="confirmed">Confirmed</option>
+                <option value="processing">Processing</option>
+                <option value="completed">Completed</option>
+                <option value="cancelled">Cancelled</option>
+              </select>
+            </div>
+
+            {/* Orders List */}
+            {filteredCycles.length === 0 ? (
+              <div className="bg-white rounded-2xl shadow-md p-12 text-center">
+                <ShoppingBagIcon className="h-16 w-16 text-gray-300 mx-auto mb-4" />
+                <h3 className="text-xl font-bold text-gray-900 mb-2">No orders found</h3>
+                <p className="text-gray-600">Try adjusting your filters</p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {filteredCycles.map(cycle => (
+                  <div key={cycle.id} className="bg-white rounded-2xl shadow-md overflow-hidden">
+                    <div className="p-6">
+                      <div className="flex items-center justify-between mb-4">
+                        <div>
+                          <h3 className="text-lg font-bold text-gray-900 mb-1">
+                            Order #{cycle.id.slice(0, 12)}
+                          </h3>
+                          <p className="text-sm text-gray-600">
+                            {cycle.totalParticipants} participants • ₹{cycle.totalAmount?.toLocaleString()}
+                          </p>
+                        </div>
+                        {getStatusBadge(cycle.phase)}
+                      </div>
+
+                      {/* Actions */}
+                      <div className="flex flex-wrap gap-2 pt-4 border-t">
+                        {cycle.phase === 'collecting' && (
+                          <button
+                            onClick={() => updateOrderCycleStatus(cycle.id, 'payment_window')}
+                            className="px-4 py-2 bg-yellow-600 text-white rounded-lg hover:bg-yellow-700 transition-colors text-sm"
+                          >
+                            Open Payment Window
+                          </button>
+                        )}
+                        {cycle.phase === 'payment_window' && (
+                          <button
+                            onClick={() => updateOrderCycleStatus(cycle.id, 'confirmed')}
+                            className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-sm"
+                          >
+                            Confirm Order
+                          </button>
+                        )}
+                        {cycle.phase === 'confirmed' && (
+                          <button
+                            onClick={() => updateOrderCycleStatus(cycle.id, 'processing')}
+                            className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors text-sm"
+                          >
+                            Start Processing
+                          </button>
+                        )}
+                        {cycle.phase === 'processing' && (
+                          <button
+                            onClick={() => updateOrderCycleStatus(cycle.id, 'completed')}
+                            className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-sm"
+                          >
+                            Mark Complete
+                          </button>
+                        )}
+                        <button
+                          onClick={() => generatePackingList(cycle)}
+                          className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm flex items-center gap-2"
+                        >
+                          <PrinterIcon className="h-4 w-4" />
+                          <span>Packing List</span>
+                        </button>
+                        <button
+                          onClick={() => setSelectedCycle(cycle)}
+                          className="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors text-sm"
+                        >
+                          View Details
+                        </button>
+                      </div>
+
+                      {/* Expanded Details */}
+                      {selectedCycle?.id === cycle.id && (
+                        <div className="mt-4 pt-4 border-t">
+                          <h4 className="font-semibold mb-3">Participants</h4>
+                          <div className="space-y-2 max-h-64 overflow-y-auto">
+                            {cycle.participants?.map((p, idx) => (
+                              <div key={idx} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                                <div>
+                                  <p className="font-medium">{p.userName}</p>
+                                  <p className="text-sm text-gray-600">
+                                    {p.items?.length} items • ₹{p.totalAmount?.toLocaleString()}
+                                  </p>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <span className={`px-2 py-1 rounded text-xs font-bold ${
+                                    p.paymentStatus === 'paid' 
+                                      ? 'bg-green-100 text-green-800'
+                                      : 'bg-yellow-100 text-yellow-800'
+                                  }`}>
+                                    {p.paymentStatus}
+                                  </span>
+                                  {cycle.phase === 'processing' && (
+                                    <button
+                                      onClick={() => markAsDelivered(cycle.id, p.userId)}
+                                      className="px-3 py-1 bg-green-600 text-white rounded text-xs hover:bg-green-700"
+                                    >
+                                      Mark Delivered
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
@@ -875,23 +1096,254 @@ export default function AdminDashboard() {
           </div>
         )}
 
-        {/* Orders Tab - Keep existing implementation */}
-        {activeTab === 'orders' && (
-          <div className="space-y-6 animate-fade-in">
-            {/* Your existing orders implementation */}
-            <div className="text-center text-gray-600">
-              Order management content here (keep your existing implementation)
-            </div>
-          </div>
-        )}
-
-        {/* Groups Tab - Keep existing implementation */}
+        {/* Groups Tab */}
         {activeTab === 'groups' && (
           <div className="space-y-6 animate-fade-in">
-            {/* Your existing groups implementation */}
-            <div className="text-center text-gray-600">
-              Groups management content here (keep your existing implementation)
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-2xl font-bold text-gray-900">Manage Groups</h2>
+                <p className="text-gray-600 mt-1">Create, edit, or manage community groups</p>
+              </div>
+              <button
+                onClick={() => {
+                  setShowCreateGroup(true);
+                  setEditingGroup(null);
+                }}
+                className="flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-xl font-bold hover:shadow-xl transition-all"
+              >
+                <PlusIcon className="h-5 w-5" />
+                <span>Create Group</span>
+              </button>
             </div>
+
+            {/* Search */}
+            <div className="relative">
+              <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
+              <input
+                type="text"
+                placeholder="Search groups..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="w-full pl-10 pr-4 py-3 border-2 border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-green-500"
+              />
+            </div>
+
+            {/* Groups Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {filteredGroups.map(group => {
+                const memberCount = group.members?.length || 0;
+                const maxMembers = group.maxMembers || 100;
+                const percentage = Math.round((memberCount / maxMembers) * 100);
+
+                return (
+                  <div key={group.id} className="bg-white rounded-2xl shadow-md overflow-hidden hover:shadow-xl transition-all">
+                    <div className={`p-6 ${group.isActive ? 'bg-gradient-to-br from-green-50 to-emerald-50' : 'bg-gray-100'}`}>
+                      <div className="flex items-center justify-between mb-3">
+                        <span className={`px-3 py-1 rounded-lg text-xs font-bold ${
+                          group.isActive ? 'bg-green-600 text-white' : 'bg-gray-400 text-white'
+                        }`}>
+                          {group.isActive ? 'Active' : 'Inactive'}
+                        </span>
+                        <span className="text-sm font-medium text-gray-600">
+                          {group.category}
+                        </span>
+                      </div>
+
+                      <h3 className="text-xl font-bold text-gray-900 mb-2 line-clamp-1">
+                        {group.name}
+                      </h3>
+
+                      <div className="flex items-center gap-2 text-gray-600 mb-4">
+                        <MapPinIcon className="h-4 w-4" />
+                        <span className="text-sm">
+                          {group.area?.city}, {group.area?.pincode}
+                        </span>
+                      </div>
+
+                      <div className="mb-4">
+                        <div className="flex justify-between text-sm text-gray-600 mb-2">
+                          <span>Members</span>
+                          <span className="font-bold">{memberCount}/{maxMembers}</span>
+                        </div>
+                        <div className="w-full bg-gray-200 rounded-full h-2">
+                          <div 
+                            className="bg-green-600 h-2 rounded-full transition-all"
+                            style={{ width: `${percentage}%` }}
+                          />
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2 mb-4">
+                        <div className="bg-white p-2 rounded-lg">
+                          <p className="text-xs text-gray-600">Orders</p>
+                          <p className="text-lg font-bold text-gray-900">{group.stats?.totalOrders || 0}</p>
+                        </div>
+                        <div className="bg-white p-2 rounded-lg">
+                          <p className="text-xs text-gray-600">Savings</p>
+                          <p className="text-lg font-bold text-green-600">₹{(group.stats?.totalSavings || 0).toLocaleString()}</p>
+                        </div>
+                      </div>
+
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => handleEditGroup(group)}
+                          className="flex-1 px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          onClick={() => handleToggleGroupStatus(group.id, group.isActive)}
+                          className={`flex-1 px-3 py-2 rounded-lg transition-colors text-sm font-medium ${
+                            group.isActive
+                              ? 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200'
+                              : 'bg-green-100 text-green-700 hover:bg-green-200'
+                          }`}
+                        >
+                          {group.isActive ? 'Deactivate' : 'Activate'}
+                        </button>
+                        <button
+                          onClick={() => handleDeleteGroup(group.id)}
+                          className="px-3 py-2 bg-red-100 text-red-600 rounded-lg hover:bg-red-200 transition-colors"
+                        >
+                          <TrashIcon className="h-5 w-5" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Create/Edit Group Modal */}
+            {showCreateGroup && (
+              <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+                <div className="bg-white rounded-2xl shadow-2xl max-w-xl w-full">
+                  <div className="p-6 border-b border-gray-200">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-2xl font-bold text-gray-900">
+                        {editingGroup ? 'Edit Group' : 'Create New Group'}
+                      </h3>
+                      <button
+                        onClick={() => {
+                          setShowCreateGroup(false);
+                          setEditingGroup(null);
+                          setNewGroup({
+                            name: '',
+                            city: '',
+                            pincode: '',
+                            maxMembers: 100,
+                            category: 'groceries'
+                          });
+                        }}
+                        className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                      >
+                        <XCircleIcon className="h-6 w-6 text-gray-500" />
+                      </button>
+                    </div>
+                  </div>
+
+                  <form onSubmit={editingGroup ? handleUpdateGroup : handleCreateGroup} className="p-6 space-y-4">
+                    <div>
+                      <label className="block text-sm font-semibold text-gray-700 mb-2">
+                        Group Name *
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={newGroup.name}
+                        onChange={(e) => setNewGroup({...newGroup, name: e.target.value})}
+                        placeholder="e.g., Andheri West Buyers"
+                        className="w-full px-4 py-3 border-2 border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-green-500"
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm font-semibold text-gray-700 mb-2">
+                          City *
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          value={newGroup.city}
+                          onChange={(e) => setNewGroup({...newGroup, city: e.target.value})}
+                          placeholder="Mumbai"
+                          className="w-full px-4 py-3 border-2 border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-green-500"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-sm font-semibold text-gray-700 mb-2">
+                          Pincode *
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          pattern="[0-9]{6}"
+                          value={newGroup.pincode}
+                          onChange={(e) => setNewGroup({...newGroup, pincode: e.target.value})}
+                          placeholder="400053"
+                          className="w-full px-4 py-3 border-2 border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-green-500"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm font-semibold text-gray-700 mb-2">
+                          Max Members *
+                        </label>
+                        <input
+                          type="number"
+                          required
+                          min="10"
+                          max="500"
+                          value={newGroup.maxMembers}
+                          onChange={(e) => setNewGroup({...newGroup, maxMembers: e.target.value})}
+                          className="w-full px-4 py-3 border-2 border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-green-500"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-sm font-semibold text-gray-700 mb-2">
+                          Category *
+                        </label>
+                        <select
+                          required
+                          value={newGroup.category}
+                          onChange={(e) => setNewGroup({...newGroup, category: e.target.value})}
+                          className="w-full px-4 py-3 border-2 border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-green-500"
+                        >
+                          <option value="groceries">Groceries</option>
+                          <option value="household">Household</option>
+                          <option value="general">General</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div className="flex gap-3 pt-4">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowCreateGroup(false);
+                          setEditingGroup(null);
+                        }}
+                        className="flex-1 px-6 py-3 bg-gray-200 text-gray-700 rounded-xl font-semibold hover:bg-gray-300 transition-colors"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={creatingGroup}
+                        className="flex-1 px-6 py-3 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-xl font-bold hover:shadow-xl transition-all disabled:opacity-50"
+                      >
+                        {creatingGroup ? 'Saving...' : editingGroup ? 'Update Group' : 'Create Group'}
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
