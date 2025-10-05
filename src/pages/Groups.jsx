@@ -1,7 +1,7 @@
-// src/pages/Groups.jsx - FIXED: Proper member checking
+// src/pages/Groups.jsx - ENHANCED with Mid-Cycle Join, Admin Controls
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { collection, getDocs, query, where } from 'firebase/firestore';
+import { collection, getDocs, query, where, orderBy } from 'firebase/firestore';
 import { db } from '../config/firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { groupService } from '../services/groupService';
@@ -13,7 +13,12 @@ import {
   SparklesIcon,
   CheckBadgeIcon,
   MagnifyingGlassIcon,
-  PlusIcon
+  PlusIcon,
+  ClockIcon,
+  FireIcon,
+  CurrencyRupeeIcon,
+  ExclamationTriangleIcon,
+  Cog6ToothIcon
 } from '@heroicons/react/24/outline';
 import { SkeletonLoader } from '../components/LoadingSpinner';
 import toast from 'react-hot-toast';
@@ -22,6 +27,7 @@ export default function Groups() {
   const [groups, setGroups] = useState([]);
   const [myGroups, setMyGroups] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
+  const [filterBy, setFilterBy] = useState('all'); // all, active, nearby
   const [loading, setLoading] = useState(true);
   const [joiningGroup, setJoiningGroup] = useState(null);
   const { currentUser, userProfile } = useAuth();
@@ -31,38 +37,53 @@ export default function Groups() {
     if (currentUser) {
       fetchGroups();
     }
-  }, [currentUser]);
+  }, [currentUser, filterBy]);
 
   const fetchGroups = async () => {
     try {
       setLoading(true);
       
       // Fetch all active groups
-      const groupsQuery = query(
+      let groupsQuery = query(
         collection(db, 'groups'),
-        where('isActive', '==', true)
+        where('isActive', '==', true),
+        orderBy('createdAt', 'desc')
       );
+      
       const snapshot = await getDocs(groupsQuery);
       const allGroups = snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
       }));
 
-      // FIXED: Check group's members array instead of userProfile.joinedGroups
+      // Separate user's groups from available groups
       const joined = allGroups.filter(g => 
         g.members?.includes(currentUser.uid)
       );
+      
       const available = allGroups.filter(g => 
         !g.members?.includes(currentUser.uid)
       );
 
+      // Apply filters
+      let filteredAvailable = available;
+      
+      if (filterBy === 'active') {
+        filteredAvailable = available.filter(g => g.currentOrderCycle);
+      } else if (filterBy === 'nearby') {
+        // Filter by user's city/pincode
+        filteredAvailable = available.filter(g => 
+          g.area?.city?.toLowerCase() === userProfile?.city?.toLowerCase() ||
+          g.area?.pincode === userProfile?.pincode
+        );
+      }
+
       setMyGroups(joined);
-      setGroups(available);
+      setGroups(filteredAvailable);
       
       console.log('✅ Groups loaded:', {
         myGroups: joined.length,
-        availableGroups: available.length,
-        userId: currentUser.uid
+        availableGroups: filteredAvailable.length
       });
     } catch (error) {
       console.error('Error fetching groups:', error);
@@ -72,15 +93,45 @@ export default function Groups() {
     }
   };
 
-  const handleJoinGroup = async (groupId) => {
+  const handleJoinGroup = async (groupId, groupData) => {
     setJoiningGroup(groupId);
     
     try {
-      await groupService.joinGroup(groupId, currentUser.uid);
-      toast.success('Successfully joined group! 🎉');
+      // Check if user is suspended
+      const isSuspended = await groupService.checkUserSuspension(currentUser.uid);
+      if (isSuspended) {
+        toast.error('Your account is temporarily suspended. Please contact support.', {
+          duration: 7000,
+          icon: '⚠️'
+        });
+        return;
+      }
+
+      // Check if group has active order cycle
+      const hasActiveCycle = groupData.currentOrderCycle;
       
-      // Refresh groups to update UI
+      await groupService.joinGroup(groupId, currentUser.uid);
+      
+      if (hasActiveCycle) {
+        toast.success(
+          <div>
+            <p className="font-bold mb-1">Joined group successfully! 🎉</p>
+            <p className="text-sm">This group has an active order cycle. You can join open products.</p>
+          </div>,
+          { duration: 6000 }
+        );
+      } else {
+        toast.success('Successfully joined group! 🎉', { duration: 4000 });
+      }
+      
+      // Refresh groups
       await fetchGroups();
+      
+      // Navigate to group
+      setTimeout(() => {
+        navigate(`/groups/${groupId}`);
+      }, 1500);
+      
     } catch (error) {
       console.error('Error joining group:', error);
       toast.error(error.message || 'Failed to join group');
@@ -126,17 +177,54 @@ export default function Groups() {
           </p>
         </div>
 
-        {/* Search Bar */}
-        <div className="mb-8">
-          <div className="relative max-w-2xl">
-            <MagnifyingGlassIcon className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
-            <input
-              type="text"
-              placeholder="Search by group name, city, or pincode..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full pl-12 pr-4 py-4 border-2 border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500 text-lg"
-            />
+        {/* Search and Filters */}
+        <div className="mb-8 space-y-4">
+          <div className="flex flex-col sm:flex-row gap-4">
+            {/* Search Bar */}
+            <div className="relative flex-1">
+              <MagnifyingGlassIcon className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
+              <input
+                type="text"
+                placeholder="Search by group name, city, or pincode..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="w-full pl-12 pr-4 py-4 border-2 border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500 text-lg"
+              />
+            </div>
+
+            {/* Filter Buttons */}
+            <div className="flex gap-2">
+              <button
+                onClick={() => setFilterBy('all')}
+                className={`px-4 py-2 rounded-xl font-medium transition-all ${
+                  filterBy === 'all'
+                    ? 'bg-green-600 text-white shadow-lg'
+                    : 'bg-white text-gray-700 border-2 border-gray-200 hover:border-green-300'
+                }`}
+              >
+                All Groups
+              </button>
+              <button
+                onClick={() => setFilterBy('active')}
+                className={`px-4 py-2 rounded-xl font-medium transition-all ${
+                  filterBy === 'active'
+                    ? 'bg-green-600 text-white shadow-lg'
+                    : 'bg-white text-gray-700 border-2 border-gray-200 hover:border-green-300'
+                }`}
+              >
+                Active Orders
+              </button>
+              <button
+                onClick={() => setFilterBy('nearby')}
+                className={`px-4 py-2 rounded-xl font-medium transition-all ${
+                  filterBy === 'nearby'
+                    ? 'bg-green-600 text-white shadow-lg'
+                    : 'bg-white text-gray-700 border-2 border-gray-200 hover:border-green-300'
+                }`}
+              >
+                Nearby
+              </button>
+            </div>
           </div>
         </div>
 
@@ -158,6 +246,7 @@ export default function Groups() {
                   key={group.id}
                   group={group}
                   isMember={true}
+                  userProfile={userProfile}
                   onNavigate={() => navigate(`/groups/${group.id}`)}
                 />
               ))}
@@ -167,35 +256,44 @@ export default function Groups() {
 
         {/* Available Groups Section */}
         <div>
-          <div className="flex items-center gap-3 mb-6">
-            <div className="w-10 h-10 bg-gradient-to-br from-blue-600 to-cyan-600 rounded-xl flex items-center justify-center">
-              <UserGroupIcon className="h-6 w-6 text-white" />
+          <div className="flex items-center justify-between mb-6">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-gradient-to-br from-blue-600 to-cyan-600 rounded-xl flex items-center justify-center">
+                <UserGroupIcon className="h-6 w-6 text-white" />
+              </div>
+              <h2 className="text-2xl font-bold text-gray-900">
+                Available Groups ({filteredGroups.length})
+              </h2>
             </div>
-            <h2 className="text-2xl font-bold text-gray-900">
-              Available Groups ({filteredGroups.length})
-            </h2>
           </div>
 
           {filteredGroups.length === 0 ? (
             <div className="bg-white rounded-2xl shadow-md p-12 text-center">
               <UserGroupIcon className="h-16 w-16 text-gray-300 mx-auto mb-4" />
               <h3 className="text-xl font-bold text-gray-900 mb-2">
-                {searchTerm ? 'No groups found' : myGroups.length > 0 ? 'All caught up!' : 'No groups available'}
+                {searchTerm || filterBy !== 'all' 
+                  ? 'No groups found' 
+                  : myGroups.length > 0 
+                    ? 'All caught up!' 
+                    : 'No groups available'}
               </h3>
               <p className="text-gray-600 mb-6">
-                {searchTerm 
-                  ? 'Try adjusting your search terms' 
+                {searchTerm || filterBy !== 'all'
+                  ? 'Try adjusting your search or filters' 
                   : myGroups.length > 0 
                     ? "You've joined all available groups in your area"
                     : 'New groups will appear here as they are created'
                 }
               </p>
-              {searchTerm && (
+              {(searchTerm || filterBy !== 'all') && (
                 <button
-                  onClick={() => setSearchTerm('')}
+                  onClick={() => {
+                    setSearchTerm('');
+                    setFilterBy('all');
+                  }}
                   className="px-6 py-3 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-xl font-bold hover:shadow-xl hover:shadow-green-500/50 transition-all"
                 >
-                  Clear Search
+                  Clear Filters
                 </button>
               )}
             </div>
@@ -207,7 +305,8 @@ export default function Groups() {
                   group={group}
                   isMember={false}
                   isJoining={joiningGroup === group.id}
-                  onJoin={() => handleJoinGroup(group.id)}
+                  onJoin={() => handleJoinGroup(group.id, group)}
+                  userProfile={userProfile}
                 />
               ))}
             </div>
@@ -218,13 +317,18 @@ export default function Groups() {
   );
 }
 
-// Group Card Component
-function GroupCard({ group, isMember, isJoining, onJoin, onNavigate }) {
+// Enhanced Group Card Component
+function GroupCard({ group, isMember, isJoining, onJoin, onNavigate, userProfile }) {
   const stats = group.stats || {};
   const area = group.area || {};
   const memberCount = group.members?.length || stats.totalMembers || 0;
   const maxMembers = group.maxMembers || 100;
   const memberPercentage = Math.round((memberCount / maxMembers) * 100);
+  const hasActiveCycle = !!group.currentOrderCycle;
+  const isAdmin = group.createdBy === userProfile?.id;
+  const isSameArea = 
+    area.city?.toLowerCase() === userProfile?.city?.toLowerCase() ||
+    area.pincode === userProfile?.pincode;
 
   return (
     <div className="bg-white rounded-2xl shadow-md overflow-hidden hover:shadow-2xl transform hover:-translate-y-2 transition-all duration-300 group">
@@ -236,12 +340,34 @@ function GroupCard({ group, isMember, isJoining, onJoin, onNavigate }) {
         </div>
         <UserGroupIcon className="h-16 w-16 text-white relative z-10" />
         
-        {/* Member Badge */}
-        {isMember && (
-          <div className="absolute top-4 right-4 z-10">
-            <div className="flex items-center gap-1 px-3 py-1 bg-white/90 backdrop-blur-sm text-green-600 rounded-full text-sm font-bold shadow-lg">
+        {/* Badges */}
+        <div className="absolute top-3 right-3 z-10 flex flex-col gap-2">
+          {isMember && (
+            <div className="flex items-center gap-1 px-3 py-1 bg-white/90 backdrop-blur-sm text-green-600 rounded-full text-xs font-bold shadow-lg">
               <CheckBadgeIcon className="h-4 w-4" />
               <span>Joined</span>
+            </div>
+          )}
+          {isAdmin && (
+            <div className="flex items-center gap-1 px-3 py-1 bg-purple-500/90 backdrop-blur-sm text-white rounded-full text-xs font-bold shadow-lg">
+              <Cog6ToothIcon className="h-4 w-4" />
+              <span>Admin</span>
+            </div>
+          )}
+          {hasActiveCycle && !isMember && (
+            <div className="flex items-center gap-1 px-3 py-1 bg-orange-500/90 backdrop-blur-sm text-white rounded-full text-xs font-bold shadow-lg animate-pulse">
+              <FireIcon className="h-4 w-4" />
+              <span>Active</span>
+            </div>
+          )}
+        </div>
+
+        {/* Same Area Badge */}
+        {!isMember && isSameArea && (
+          <div className="absolute top-3 left-3 z-10">
+            <div className="flex items-center gap-1 px-3 py-1 bg-blue-500/90 backdrop-blur-sm text-white rounded-full text-xs font-bold shadow-lg">
+              <MapPinIcon className="h-4 w-4" />
+              <span>Your Area</span>
             </div>
           </div>
         )}
@@ -255,12 +381,27 @@ function GroupCard({ group, isMember, isJoining, onJoin, onNavigate }) {
         </h3>
 
         {/* Location */}
-        <div className="flex items-center gap-2 text-gray-600 mb-3">
+        <div className="flex items-center gap-2 text-gray-600 mb-4">
           <MapPinIcon className="h-5 w-5 text-green-600 flex-shrink-0" />
           <span className="text-sm">
             {area.city || 'Mumbai'}, {area.pincode || '400001'}
           </span>
         </div>
+
+        {/* Active Cycle Warning */}
+        {hasActiveCycle && !isMember && (
+          <div className="mb-4 p-3 bg-orange-50 border-2 border-orange-200 rounded-xl">
+            <div className="flex items-start gap-2">
+              <ClockIcon className="h-5 w-5 text-orange-600 flex-shrink-0 mt-0.5" />
+              <div>
+                <p className="text-sm font-bold text-orange-900">Active Order Cycle</p>
+                <p className="text-xs text-orange-700 mt-1">
+                  Join now to participate in open products
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Stats */}
         <div className="grid grid-cols-2 gap-4 mb-4">
@@ -272,6 +413,9 @@ function GroupCard({ group, isMember, isJoining, onJoin, onNavigate }) {
             <div className="text-2xl font-bold text-blue-900">
               {memberCount}
             </div>
+            <div className="text-xs text-blue-600 mt-1">
+              of {maxMembers} max
+            </div>
           </div>
           
           <div className="bg-purple-50 rounded-xl p-3">
@@ -282,18 +426,27 @@ function GroupCard({ group, isMember, isJoining, onJoin, onNavigate }) {
             <div className="text-2xl font-bold text-purple-900">
               {stats.totalOrders || 0}
             </div>
+            <div className="text-xs text-purple-600 mt-1">
+              completed
+            </div>
           </div>
         </div>
 
         {/* Member Progress */}
         <div className="mb-4">
           <div className="flex items-center justify-between text-sm text-gray-600 mb-2">
-            <span className="font-medium">Group Capacity</span>
-            <span className="font-bold">{memberCount}/{maxMembers}</span>
+            <span className="font-medium">Capacity</span>
+            <span className="font-bold">{memberPercentage}%</span>
           </div>
           <div className="w-full h-2 bg-gray-200 rounded-full overflow-hidden">
             <div 
-              className="h-full bg-gradient-to-r from-green-500 to-emerald-600 transition-all duration-500"
+              className={`h-full rounded-full transition-all duration-500 ${
+                memberPercentage >= 90 
+                  ? 'bg-gradient-to-r from-red-500 to-orange-500' 
+                  : memberPercentage >= 70
+                  ? 'bg-gradient-to-r from-yellow-500 to-orange-500'
+                  : 'bg-gradient-to-r from-green-500 to-emerald-600'
+              }`}
               style={{ width: `${Math.min(memberPercentage, 100)}%` }}
             ></div>
           </div>
@@ -303,7 +456,7 @@ function GroupCard({ group, isMember, isJoining, onJoin, onNavigate }) {
         {stats.totalSavings > 0 && (
           <div className="mb-4 p-3 bg-gradient-to-r from-green-50 to-emerald-50 rounded-xl border border-green-200">
             <div className="flex items-center gap-2 text-green-700 mb-1">
-              <SparklesIcon className="h-4 w-4" />
+              <CurrencyRupeeIcon className="h-4 w-4" />
               <span className="text-xs font-medium">Total Savings</span>
             </div>
             <div className="text-xl font-bold text-green-600">
@@ -318,7 +471,7 @@ function GroupCard({ group, isMember, isJoining, onJoin, onNavigate }) {
             onClick={onNavigate}
             className="w-full py-3 px-4 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-xl font-bold hover:shadow-xl hover:shadow-green-500/50 transform hover:-translate-y-0.5 transition-all duration-200 flex items-center justify-center gap-2"
           >
-            <span>View Details</span>
+            <span>View Group</span>
           </button>
         ) : (
           <button
@@ -332,11 +485,14 @@ function GroupCard({ group, isMember, isJoining, onJoin, onNavigate }) {
                 <span>Joining...</span>
               </>
             ) : memberCount >= maxMembers ? (
-              <span>Group Full</span>
+              <>
+                <ExclamationTriangleIcon className="h-5 w-5" />
+                <span>Group Full</span>
+              </>
             ) : (
               <>
                 <PlusIcon className="h-5 w-5" />
-                <span>Join Group</span>
+                <span>{hasActiveCycle ? 'Join Mid-Cycle' : 'Join Group'}</span>
               </>
             )}
           </button>
