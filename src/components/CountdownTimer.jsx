@@ -1,5 +1,5 @@
-// src/components/CountdownTimer.jsx - Reusable Countdown Timer Component
-import React, { useState, useEffect } from 'react';
+// src/components/CountdownTimer.jsx - FIXED: No infinite toasts
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   ClockIcon, 
   ExclamationTriangleIcon,
@@ -16,6 +16,7 @@ export default function CountdownTimer({
   const [timeLeft, setTimeLeft] = useState(null);
   const [isUrgent, setIsUrgent] = useState(false);
   const [hasExpired, setHasExpired] = useState(false);
+  const expireCalledRef = useRef(false);
 
   useEffect(() => {
     if (!endTime) return;
@@ -26,9 +27,13 @@ export default function CountdownTimer({
       const difference = end - now;
 
       if (difference <= 0) {
-        setHasExpired(true);
-        if (onExpire && !hasExpired) {
-          onExpire();
+        if (!hasExpired) {
+          setHasExpired(true);
+          // Call onExpire only once using ref
+          if (onExpire && !expireCalledRef.current) {
+            expireCalledRef.current = true;
+            onExpire();
+          }
         }
         return { days: 0, hours: 0, minutes: 0, seconds: 0, total: 0 };
       }
@@ -56,6 +61,12 @@ export default function CountdownTimer({
     return () => clearInterval(timer);
   }, [endTime, onExpire, hasExpired]);
 
+  // Reset states when endTime changes
+  useEffect(() => {
+    setHasExpired(false);
+    expireCalledRef.current = false;
+  }, [endTime]);
+
   if (!timeLeft) {
     return (
       <div className="animate-pulse bg-gray-200 rounded-xl h-24"></div>
@@ -66,7 +77,7 @@ export default function CountdownTimer({
     return (
       <div className="bg-red-50 border-2 border-red-300 rounded-2xl p-4 sm:p-6">
         <div className="flex items-center justify-center gap-3 text-red-700">
-          <ExclamationTriangleIcon className="h-8 w-8 animate-bounce" />
+          <ExclamationTriangleIcon className="h-8 w-8" />
           <div className="text-center">
             <p className="text-lg sm:text-xl font-bold">Time Expired!</p>
             <p className="text-sm">{phase === 'collecting' ? 'Collection phase ended' : 'Payment window closed'}</p>
@@ -232,6 +243,7 @@ function TimeUnit({ value, label, classes, isUrgent }) {
 // Compact Timer Variant
 export function CompactTimer({ endTime, phase = "collecting" }) {
   const [timeLeft, setTimeLeft] = useState(null);
+  const [hasExpired, setHasExpired] = useState(false);
 
   useEffect(() => {
     if (!endTime) return;
@@ -242,6 +254,7 @@ export function CompactTimer({ endTime, phase = "collecting" }) {
       const difference = end - now;
 
       if (difference <= 0) {
+        setHasExpired(true);
         return { hours: 0, minutes: 0, seconds: 0, expired: true };
       }
 
@@ -262,9 +275,14 @@ export function CompactTimer({ endTime, phase = "collecting" }) {
     return () => clearInterval(timer);
   }, [endTime]);
 
+  // Reset when endTime changes
+  useEffect(() => {
+    setHasExpired(false);
+  }, [endTime]);
+
   if (!timeLeft) return null;
 
-  if (timeLeft.expired) {
+  if (hasExpired || timeLeft.expired) {
     return (
       <div className="inline-flex items-center gap-2 px-3 py-1 bg-red-100 text-red-800 rounded-full text-xs font-bold">
         <ExclamationTriangleIcon className="h-4 w-4" />

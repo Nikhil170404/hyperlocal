@@ -1,12 +1,12 @@
-// src/pages/Cart.jsx - WITH COUNTDOWN TIMER
-import React, { useState, useEffect } from 'react';
+// src/pages/Cart.jsx - FIXED: Proper timer handling
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { collection, query, where, getDocs, doc, getDoc } from 'firebase/firestore';
 import { db } from '../config/firebase';
 import { useCart } from '../contexts/CartContext';
 import { useAuth } from '../contexts/AuthContext';
 import { orderService } from '../services/groupService';
-import CountdownTimer from '../components/CountdownTimer'; // ADD THIS
+import CountdownTimer from '../components/CountdownTimer';
 import { 
   ShoppingCartIcon, 
   TrashIcon, 
@@ -42,6 +42,7 @@ export default function Cart() {
   const [loadingGroups, setLoadingGroups] = useState(true);
   const [placingOrder, setPlacingOrder] = useState(false);
   const [activeOrderCycle, setActiveOrderCycle] = useState(null);
+  const timerExpiredRef = useRef(false);
 
   useEffect(() => {
     if (currentUser && userProfile) {
@@ -89,6 +90,8 @@ export default function Cart() {
 
   const fetchActiveOrderCycle = async () => {
     try {
+      timerExpiredRef.current = false; // Reset on new fetch
+      
       const cyclesQuery = query(
         collection(db, 'orderCycles'),
         where('groupId', '==', selectedGroup),
@@ -122,6 +125,20 @@ export default function Cart() {
     if (cartItems.length === 0) {
       toast.error('Your cart is empty');
       return;
+    }
+
+    // Check if collection phase has ended
+    if (activeOrderCycle?.phase === 'collecting' && activeOrderCycle?.collectingEndsAt) {
+      const now = Date.now();
+      const endsAt = activeOrderCycle.collectingEndsAt.toMillis();
+      
+      if (now > endsAt) {
+        toast.error('Collection phase has ended. Cannot place order.', {
+          duration: 5000
+        });
+        fetchActiveOrderCycle(); // Refresh to update UI
+        return;
+      }
     }
 
     setPlacingOrder(true);
@@ -169,13 +186,17 @@ export default function Cart() {
     setSelectedGroup(groupId);
     localStorage.setItem('selectedGroupId', groupId);
     setActiveOrderCycle(null);
+    timerExpiredRef.current = false;
   };
 
   const handleTimerExpire = () => {
-    toast.error('Collection phase ended! This order cycle is now closed.', {
-      duration: 5000
-    });
-    fetchActiveOrderCycle(); // Refresh to get updated status
+    // Only show message once using ref
+    if (!timerExpiredRef.current) {
+      timerExpiredRef.current = true;
+      console.log('⏰ Collection phase timer expired');
+      // Don't show toast here - let the phase change handle it
+      fetchActiveOrderCycle();
+    }
   };
 
   if (cartItems.length === 0) {

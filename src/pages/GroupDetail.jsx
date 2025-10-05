@@ -1,5 +1,5 @@
-// src/pages/GroupDetail.jsx - COMPLETE WITH COUNTDOWN TIMER
-import React, { useState, useEffect } from 'react';
+// src/pages/GroupDetail.jsx - FIXED: No infinite toasts
+import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { doc, getDoc, onSnapshot } from 'firebase/firestore';
 import { db } from '../config/firebase';
@@ -32,6 +32,7 @@ export default function GroupDetail() {
   const [group, setGroup] = useState(null);
   const [orderCycle, setOrderCycle] = useState(null);
   const [loading, setLoading] = useState(true);
+  const previousPhaseRef = useRef(null);
 
   useEffect(() => {
     if (groupId) {
@@ -53,10 +54,19 @@ export default function GroupDetail() {
           if (groupData.currentOrderCycle) {
             const cycleDoc = await getDoc(doc(db, 'orderCycles', groupData.currentOrderCycle));
             if (cycleDoc.exists()) {
-              setOrderCycle({ id: cycleDoc.id, ...cycleDoc.data() });
+              const newCycleData = { id: cycleDoc.id, ...cycleDoc.data() };
+              
+              // Check if phase changed
+              if (previousPhaseRef.current && previousPhaseRef.current !== newCycleData.phase) {
+                handlePhaseChange(previousPhaseRef.current, newCycleData.phase);
+              }
+              
+              previousPhaseRef.current = newCycleData.phase;
+              setOrderCycle(newCycleData);
             }
           } else {
             setOrderCycle(null);
+            previousPhaseRef.current = null;
           }
         }
       }
@@ -87,7 +97,9 @@ export default function GroupDetail() {
         if (groupData.currentOrderCycle) {
           const cycleDoc = await getDoc(doc(db, 'orderCycles', groupData.currentOrderCycle));
           if (cycleDoc.exists()) {
-            setOrderCycle({ id: cycleDoc.id, ...cycleDoc.data() });
+            const cycleData = { id: cycleDoc.id, ...cycleDoc.data() };
+            previousPhaseRef.current = cycleData.phase;
+            setOrderCycle(cycleData);
           }
         }
       } else {
@@ -99,6 +111,41 @@ export default function GroupDetail() {
       toast.error('Failed to load group');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handlePhaseChange = (oldPhase, newPhase) => {
+    console.log(`📌 Phase changed: ${oldPhase} → ${newPhase}`);
+    
+    // Show appropriate message based on phase transition
+    if (oldPhase === 'collecting' && newPhase === 'payment_window') {
+      toast.success('Payment window is now open! Complete your payment.', {
+        duration: 6000,
+        icon: '💳'
+      });
+    } else if (oldPhase === 'collecting' && newPhase === 'cancelled') {
+      toast.error('Order cycle cancelled - minimum quantities not met', {
+        duration: 5000
+      });
+    } else if (oldPhase === 'payment_window' && newPhase === 'confirmed') {
+      toast.success('Order confirmed! Your items will be delivered soon.', {
+        duration: 5000,
+        icon: '✅'
+      });
+    } else if (oldPhase === 'payment_window' && newPhase === 'cancelled') {
+      toast.error('Order cycle cancelled - payment window closed', {
+        duration: 5000
+      });
+    } else if (newPhase === 'processing') {
+      toast.success('Order is being processed!', {
+        duration: 4000,
+        icon: '📦'
+      });
+    } else if (newPhase === 'completed') {
+      toast.success('Order delivered successfully!', {
+        duration: 5000,
+        icon: '🎉'
+      });
     }
   };
 
@@ -179,13 +226,9 @@ export default function GroupDetail() {
   };
 
   const handleTimerExpire = () => {
-    toast.error('Collection phase has ended!', { duration: 5000 });
-    fetchGroupDetails(); // Refresh data
-  };
-
-  const handlePaymentTimerExpire = () => {
-    toast.error('Payment window has closed!', { duration: 5000 });
-    fetchGroupDetails(); // Refresh data
+    // Timer expired - just log, don't show toast
+    // The phase change handler will show appropriate message
+    console.log('⏰ Timer expired - waiting for phase update');
   };
 
   if (loading) {
@@ -291,7 +334,7 @@ export default function GroupDetail() {
               phase="payment_window"
               title="💳 Payment Deadline"
               size="large"
-              onExpire={handlePaymentTimerExpire}
+              onExpire={handleTimerExpire}
             />
           </div>
         )}
