@@ -1,7 +1,7 @@
 // src/pages/Cart.jsx - FIXED: Proper timer handling
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { collection, query, where, getDocs, doc, getDoc } from 'firebase/firestore';
+import { collection, query, where, getDocs, doc, getDoc, onSnapshot } from 'firebase/firestore';
 import { db } from '../config/firebase';
 import { useCart } from '../contexts/CartContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -50,11 +50,86 @@ export default function Cart() {
     }
   }, [currentUser, userProfile]);
 
+  // Real-time listener for active order cycle - ONLY collecting phase
+  const previousCycleIdRef = useRef(localStorage.getItem('lastClearedCycleId'));
+  const currentCycleIdRef = useRef(null);
+
   useEffect(() => {
-    if (selectedGroup) {
-      fetchActiveOrderCycle();
-    }
-  }, [selectedGroup]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    if (!selectedGroup) return;
+
+    console.log('🔄 Setting up real-time listener for order cycle in group:', selectedGroup);
+
+    // Reset refs on group change
+    timerExpiredRef.current = false;
+
+    // Query for ONLY collecting phase cycles
+    const cyclesQuery = query(
+      collection(db, 'orderCycles'),
+      where('groupId', '==', selectedGroup),
+      where('phase', '==', 'collecting')
+    );
+
+    const unsubscribe = onSnapshot(
+      cyclesQuery,
+      (snapshot) => {
+        if (!snapshot.empty) {
+          const cycle = { id: snapshot.docs[0].id, ...snapshot.docs[0].data() };
+
+          // Verify phase AND check if collection time has expired
+          if (cycle.phase === 'collecting') {
+            const now = Date.now();
+            const endsAt = cycle.collectingEndsAt?.toMillis();
+            const isExpired = endsAt && now > endsAt;
+
+            if (isExpired) {
+              // Collection phase has expired - clear cart once per cycle
+              console.log('⏰ Collection phase expired');
+              setActiveOrderCycle(null);
+
+              // Only clear if we haven't cleared for this specific cycle yet
+              if (previousCycleIdRef.current !== cycle.id) {
+                console.log('📦 Clearing cart for expired cycle:', cycle.id);
+                previousCycleIdRef.current = cycle.id;
+                localStorage.setItem('lastClearedCycleId', cycle.id);
+                clearCart();
+                toast('Collection phase ended. Start fresh with new products!', {
+                  duration: 5000,
+                  icon: '🔄'
+                });
+              }
+
+              currentCycleIdRef.current = null;
+            } else {
+              // Active and not expired
+              if (currentCycleIdRef.current !== cycle.id) {
+                console.log('✅ Active collecting cycle found:', cycle.id);
+                currentCycleIdRef.current = cycle.id;
+              }
+
+              setActiveOrderCycle(cycle);
+            }
+          } else {
+            setActiveOrderCycle(null);
+          }
+        } else {
+          // No collecting phase cycle - this is OK, user can start a new one
+          console.log('❌ No active collecting cycle');
+          setActiveOrderCycle(null);
+          currentCycleIdRef.current = null;
+        }
+      },
+      (error) => {
+        console.error('❌ Error listening to order cycles:', error);
+        setActiveOrderCycle(null);
+      }
+    );
+
+    return () => {
+      console.log('🧹 Cleaning up order cycle listener');
+      unsubscribe();
+    };
+  }, [selectedGroup]); // Only depend on selectedGroup - no clearCart or cartItems!
 
   const fetchUserGroups = async () => {
     try {
@@ -88,27 +163,6 @@ export default function Cart() {
     }
   };
 
-  const fetchActiveOrderCycle = async () => {
-    try {
-      timerExpiredRef.current = false; // Reset on new fetch
-      
-      const cyclesQuery = query(
-        collection(db, 'orderCycles'),
-        where('groupId', '==', selectedGroup),
-        where('phase', 'in', ['collecting', 'payment_window'])
-      );
-      
-      const snapshot = await getDocs(cyclesQuery);
-      if (!snapshot.empty) {
-        const cycle = { id: snapshot.docs[0].id, ...snapshot.docs[0].data() };
-        setActiveOrderCycle(cycle);
-      } else {
-        setActiveOrderCycle(null);
-      }
-    } catch (error) {
-      console.error('Error fetching order cycle:', error);
-    }
-  };
 
   const handleQuantityChange = (productId, newQuantity) => {
     if (newQuantity > 0) {
@@ -136,7 +190,7 @@ export default function Cart() {
         toast.error('Collection phase has ended. Cannot place order.', {
           duration: 5000
         });
-        fetchActiveOrderCycle(); // Refresh to update UI
+        // Real-time listener will update automatically
         return;
       }
     }
@@ -189,15 +243,22 @@ export default function Cart() {
     timerExpiredRef.current = false;
   };
 
-  const handleTimerExpire = () => {
-    // Only show message once using ref
-    if (!timerExpiredRef.current) {
-      timerExpiredRef.current = true;
-      console.log('⏰ Collection phase timer expired');
-      // Don't show toast here - let the phase change handle it
-      fetchActiveOrderCycle();
-    }
-  };
+  const handleTimerExpire = useCallback(() => {
+    // Only execute once using ref
+    if (timerExpiredRef.current) return;
+
+    timerExpiredRef.current = true;
+    console.log('⏰ Collection phase timer expired');
+
+    // Show toast notification
+    toast('Collection phase ended. Checking for phase update...', {
+      duration: 3000,
+      icon: '⏰'
+    });
+
+    // The phase will be updated automatically by the real-time listener
+    // We don't need to fetch manually - just wait for Firestore update
+  }, []);
 
   if (cartItems.length === 0) {
     return (
@@ -239,12 +300,33 @@ export default function Cart() {
         {activeOrderCycle && activeOrderCycle.phase === 'collecting' && activeOrderCycle.collectingEndsAt && (
           <div className="mb-6 sm:mb-8">
             <CountdownTimer
+              key={`cart-timer-${activeOrderCycle.id}`}
               endTime={activeOrderCycle.collectingEndsAt}
               phase="collecting"
               title="⏰ Collection Phase Ending"
               size="medium"
               onExpire={handleTimerExpire}
             />
+          </div>
+        )}
+
+        {/* Info Message when no active cycle - This is OK! */}
+        {!activeOrderCycle && cartItems.length > 0 && (
+          <div className="mb-6 sm:mb-8 bg-blue-50 border-2 border-blue-300 rounded-2xl p-6">
+            <div className="flex items-start gap-4">
+              <ShoppingCartIcon className="h-8 w-8 text-blue-600 flex-shrink-0" />
+              <div className="flex-1">
+                <h3 className="text-lg font-bold text-blue-900 mb-2">
+                  Ready to Place Order
+                </h3>
+                <p className="text-blue-800 mb-4">
+                  You have {cartItems.length} item(s) in your cart. When you place your order, a new collection cycle will be created for your group!
+                </p>
+                <p className="text-sm text-blue-700">
+                  💡 Your order will start a new 4-hour collection window for other members to join.
+                </p>
+              </div>
+            </div>
           </div>
         )}
 
@@ -484,10 +566,31 @@ export default function Cart() {
               </div>
 
               {/* Info */}
-              <div className="px-4 sm:px-6 pb-4 sm:pb-6">
+              <div className="px-4 sm:px-6 pb-4 sm:pb-6 space-y-3">
+                {/* Info Note */}
                 <div className="p-3 sm:p-4 bg-blue-50 rounded-xl border border-blue-200">
                   <div className="text-xs sm:text-sm text-blue-800">
                     <strong>Note:</strong> Your order will be confirmed once the group reaches minimum quantity. You'll be notified when it's time to pay!
+                  </div>
+                </div>
+
+                {/* Payment Methods - India Specific */}
+                <div className="p-3 sm:p-4 bg-green-50 rounded-xl border border-green-200">
+                  <div className="text-xs sm:text-sm text-green-800">
+                    <p className="font-bold mb-2">💳 Accepted Payment Methods:</p>
+                    <ul className="space-y-1 text-xs">
+                      <li>✅ UPI (Google Pay, PhonePe, Paytm)</li>
+                      <li>✅ Credit/Debit Cards</li>
+                      <li>✅ Net Banking</li>
+                      <li>✅ Wallets (Paytm, Mobikwik)</li>
+                    </ul>
+                  </div>
+                </div>
+
+                {/* Cash on Delivery Note - India Specific */}
+                <div className="p-3 sm:p-4 bg-yellow-50 rounded-xl border border-yellow-200">
+                  <div className="text-xs sm:text-sm text-yellow-800">
+                    ⚠️ <strong>COD not available</strong> for group orders. Online payment ensures faster processing and delivery.
                   </div>
                 </div>
               </div>

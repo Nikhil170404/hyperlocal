@@ -30,7 +30,7 @@ export default function CountdownTimer({
       if (difference <= 0) {
         if (!hasExpired) {
           setHasExpired(true);
-          
+
           // Call onExpire only once using ref
           if (onExpire && !expireCalledRef.current) {
             expireCalledRef.current = true;
@@ -38,13 +38,13 @@ export default function CountdownTimer({
             onExpire();
           }
         }
-        
+
         // Stop the interval when expired
         if (intervalRef.current) {
           clearInterval(intervalRef.current);
           intervalRef.current = null;
         }
-        
+
         return { days: 0, hours: 0, minutes: 0, seconds: 0, total: 0 };
       }
 
@@ -60,14 +60,20 @@ export default function CountdownTimer({
       };
     };
 
-    // Initial calculation
-    setTimeLeft(calculateTimeLeft());
+    // Check if already expired before starting
+    const initialTime = calculateTimeLeft();
+    setTimeLeft(initialTime);
 
-    // Update every second
+    // Don't start interval if already expired
+    if (initialTime.total <= 0) {
+      return;
+    }
+
+    // Update every second only if not expired
     intervalRef.current = setInterval(() => {
       const newTimeLeft = calculateTimeLeft();
       setTimeLeft(newTimeLeft);
-      
+
       // If expired, stop interval
       if (newTimeLeft.total <= 0 && intervalRef.current) {
         clearInterval(intervalRef.current);

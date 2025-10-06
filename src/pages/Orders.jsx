@@ -5,7 +5,7 @@ import { collection, query, where, getDocs, orderBy } from 'firebase/firestore';
 import { db } from '../config/firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { CompactTimer } from '../components/CountdownTimer';
-import { 
+import {
   ShoppingBagIcon,
   ClockIcon,
   CheckCircleIcon,
@@ -15,7 +15,10 @@ import {
   CalendarIcon,
   FunnelIcon,
   MagnifyingGlassIcon,
-  FireIcon
+  FireIcon,
+  PhoneIcon,
+  MapPinIcon,
+  ShareIcon
 } from '@heroicons/react/24/outline';
 import { SkeletonLoader } from '../components/LoadingSpinner';
 
@@ -148,6 +151,33 @@ export default function Orders() {
   };
 
   const stats = calculateStats();
+
+  // Share order via WhatsApp - India specific
+  const handleShareOrder = (order) => {
+    const participation = getUserParticipation(order);
+    const statusInfo = getStatusInfo(order.phase);
+
+    const message = `📦 My Group Order Update\n\nOrder ID: #${order.id.slice(0, 8)}\nStatus: ${statusInfo.label}\nAmount: ₹${participation?.totalAmount?.toLocaleString()}\nItems: ${participation?.items?.length}\n\n${
+      order.phase === 'payment_window'
+        ? '⏰ Payment pending - will complete soon!'
+        : order.phase === 'processing'
+        ? '🚚 Order is being processed for delivery'
+        : order.phase === 'completed'
+        ? '✅ Order delivered successfully!'
+        : 'Order in progress'
+    }`;
+
+    const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(message)}`;
+    window.open(whatsappUrl, '_blank');
+  };
+
+  // Track order - India specific with phone call option
+  const handleContactSupport = (order) => {
+    const message = `Hi! I need help with my order.\n\nOrder ID: #${order.id.slice(0, 8)}\nCurrent Status: ${getStatusInfo(order.phase).label}\n\nCould you please provide an update?`;
+
+    const whatsappUrl = `https://wa.me/+919876543210?text=${encodeURIComponent(message)}`;
+    window.open(whatsappUrl, '_blank');
+  };
 
   if (loading) {
     return (
@@ -361,13 +391,54 @@ export default function Orders() {
                             </div>
                           </div>
                         ))}
-                        
+
                         {participation?.items?.length > 3 && (
                           <div className="flex items-center justify-center p-3 bg-gray-50 rounded-lg text-gray-600 font-medium">
                             +{participation.items.length - 3} more
                           </div>
                         )}
                       </div>
+
+                      {/* India-specific Action Buttons */}
+                      <div className="mt-4 flex flex-wrap gap-2">
+                        {order.phase === 'processing' && (
+                          <button
+                            onClick={() => handleContactSupport(order)}
+                            className="flex items-center gap-2 px-4 py-2 bg-blue-50 text-blue-700 border-2 border-blue-200 rounded-lg hover:bg-blue-100 transition-all text-sm font-medium"
+                          >
+                            <PhoneIcon className="h-4 w-4" />
+                            <span>Track Order</span>
+                          </button>
+                        )}
+
+                        {(order.phase === 'confirmed' || order.phase === 'processing' || order.phase === 'completed') && (
+                          <button
+                            onClick={() => handleShareOrder(order)}
+                            className="flex items-center gap-2 px-4 py-2 bg-green-50 text-green-700 border-2 border-green-200 rounded-lg hover:bg-green-100 transition-all text-sm font-medium"
+                          >
+                            <ShareIcon className="h-4 w-4" />
+                            <span>Share Update</span>
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Delivery Info for Processing/Completed Orders */}
+                      {(order.phase === 'processing' || order.phase === 'completed') && (
+                        <div className="mt-3 p-3 bg-purple-50 border border-purple-200 rounded-lg">
+                          <div className="flex items-start gap-2">
+                            <TruckIcon className="h-5 w-5 text-purple-600 flex-shrink-0 mt-0.5" />
+                            <div className="text-sm text-purple-800">
+                              <p className="font-semibold mb-1">
+                                {order.phase === 'completed' ? 'Delivered' : 'Out for Delivery'}
+                              </p>
+                              <p className="text-xs flex items-center gap-1">
+                                <MapPinIcon className="h-3 w-3" />
+                                Expected delivery to your location within 24-48 hours
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>

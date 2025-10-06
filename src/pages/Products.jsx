@@ -4,13 +4,15 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { collection, getDocs, query, where } from 'firebase/firestore';
 import { db } from '../config/firebase';
 import { useCart } from '../contexts/CartContext';
-import { 
-  ShoppingCartIcon, 
+import {
+  ShoppingCartIcon,
   MagnifyingGlassIcon,
   FunnelIcon,
   SparklesIcon,
   CheckCircleIcon,
-  TagIcon
+  TagIcon,
+  PlusIcon,
+  MinusIcon
 } from '@heroicons/react/24/outline';
 import { SkeletonLoader } from '../components/LoadingSpinner';
 import toast from 'react-hot-toast';
@@ -22,7 +24,7 @@ export default function Products() {
   const [searchTerm, setSearchTerm] = useState('');
   const [sortBy, setSortBy] = useState('name');
   const [loading, setLoading] = useState(true);
-  const { addToCart, isInCart, getItemQuantity } = useCart();
+  const { addToCart, isInCart, getItemQuantity, incrementQuantity, decrementQuantity, removeFromCart } = useCart();
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -312,7 +314,7 @@ export default function Products() {
                       <span>Min: {product.minQuantity} units</span>
                     </div>
 
-                    {/* Pricing */}
+                    {/* Pricing - Enhanced for Indian Market */}
                     <div className="mb-4">
                       <div className="flex items-baseline gap-2 mb-1">
                         <span className="text-2xl font-bold text-green-600">
@@ -321,25 +323,63 @@ export default function Products() {
                         <span className="text-sm text-gray-500 line-through">
                           ₹{product.retailPrice}
                         </span>
+                        <span className="text-xs text-gray-600">
+                          /{product.unit}
+                        </span>
                       </div>
-                      <div className="flex items-center gap-1 text-sm text-green-600 font-medium">
+                      <div className="flex items-center gap-1 text-sm text-green-600 font-medium mb-1">
                         <TagIcon className="h-4 w-4" />
-                        <span>Save ₹{savings}</span>
+                        <span>Save ₹{savings} per {product.unit}</span>
+                      </div>
+                      {/* Show price comparison for common quantities */}
+                      <div className="text-xs text-gray-600">
+                        For 10 {product.unit}: ₹{(product.groupPrice * 10).toLocaleString()} (₹{savings * 10} saved!)
                       </div>
                     </div>
 
-                    {/* Add to Cart Button */}
-                    <button
-                      onClick={() => handleAddToCart(product)}
-                      className={`w-full py-3 px-4 rounded-xl font-bold transition-all duration-200 flex items-center justify-center gap-2 ${
-                        inCart
-                          ? 'bg-green-100 text-green-700 hover:bg-green-200'
-                          : 'bg-gradient-to-r from-green-600 to-emerald-600 text-white hover:shadow-lg transform hover:-translate-y-0.5'
-                      }`}
-                    >
-                      <ShoppingCartIcon className="h-5 w-5" />
-                      <span>{inCart ? 'Add More' : 'Add to Cart'}</span>
-                    </button>
+                    {/* Add to Cart / Quantity Controls */}
+                    {inCart ? (
+                      <div className="space-y-2">
+                        {/* Quantity Controls */}
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => decrementQuantity(product.id)}
+                            className="flex-shrink-0 w-10 h-10 bg-red-100 text-red-600 rounded-lg hover:bg-red-200 transition-all flex items-center justify-center font-bold"
+                          >
+                            <MinusIcon className="h-5 w-5" />
+                          </button>
+
+                          <div className="flex-1 bg-green-50 border-2 border-green-300 rounded-lg py-2 px-4 text-center">
+                            <div className="text-xs text-green-700 font-medium">In Cart</div>
+                            <div className="text-xl font-bold text-green-900">{quantity}</div>
+                          </div>
+
+                          <button
+                            onClick={() => incrementQuantity(product.id)}
+                            className="flex-shrink-0 w-10 h-10 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-all flex items-center justify-center font-bold"
+                          >
+                            <PlusIcon className="h-5 w-5" />
+                          </button>
+                        </div>
+
+                        {/* Quick Add More Button */}
+                        <button
+                          onClick={() => handleAddToCart(product)}
+                          className="w-full py-2 px-4 bg-green-100 text-green-700 rounded-lg font-medium hover:bg-green-200 transition-all flex items-center justify-center gap-2 text-sm"
+                        >
+                          <PlusIcon className="h-4 w-4" />
+                          <span>Add More</span>
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => handleAddToCart(product)}
+                        className="w-full py-3 px-4 rounded-xl font-bold transition-all duration-200 flex items-center justify-center gap-2 bg-gradient-to-r from-green-600 to-emerald-600 text-white hover:shadow-lg transform hover:-translate-y-0.5"
+                      >
+                        <ShoppingCartIcon className="h-5 w-5" />
+                        <span>Add to Cart</span>
+                      </button>
+                    )}
                   </div>
                 </div>
               );

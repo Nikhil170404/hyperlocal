@@ -1,0 +1,253 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ============================================
+    // HELPER FUNCTIONS
+    // ============================================
+
+    // Check if user is authenticated
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // Check if user is the owner
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    // Check if user is admin
+    function isAdmin() {
+      return isSignedIn() &&
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    // Check if user is a member of a group
+    function isGroupMember(groupId) {
+      return isSignedIn() &&
+             request.auth.uid in get(/databases/$(database)/documents/groups/$(groupId)).data.members;
+    }
+
+    // Check if user is suspended
+    function isNotSuspended() {
+      let user = get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+      return !('suspendedUntil' in user) ||
+             user.suspendedUntil == null ||
+             user.suspendedUntil < request.time;
+    }
+
+    // Check if user is joining a group (adding themselves to members)
+    function isJoiningGroup(groupId) {
+      let existingMembers = resource.data.members;
+      let newMembers = request.resource.data.members;
+
+      return isSignedIn() &&
+             // User is NOT currently a member
+             !(request.auth.uid in existingMembers) &&
+             // User WILL BE a member after update
+             request.auth.uid in newMembers &&
+             // Only adding one member (themselves)
+             newMembers.size() == existingMembers.size() + 1;
+    }
+
+    // ============================================
+    // USERS COLLECTION
+    // ============================================
+    match /users/{userId} {
+      allow read: if isSignedIn();
+      allow create: if isOwner(userId);
+      allow update: if isOwner(userId) &&
+                       !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role', 'suspendedUntil', 'suspensionReason']);
+      allow update: if isAdmin();
+      allow delete: if false;
+    }
+
+    // ============================================
+    // GROUPS COLLECTION
+    // ============================================
+    match /groups/{groupId} {
+      // Anyone authenticated can read groups
+      allow read: if isSignedIn();
+
+      // Only admins can create groups
+      allow create: if isAdmin();
+
+      // Allow members, admins, OR users joining the group to update
+      allow update: if isNotSuspended() &&
+                       (isGroupMember(groupId) || isAdmin() || isJoiningGroup(groupId));
+
+      // Only admins can delete groups
+      allow delete: if isAdmin();
+    }
+
+    // ============================================
+    // PRODUCTS COLLECTION
+    // ============================================
+    match /products/{productId} {
+      allow read: if isSignedIn();
+      allow create, update, delete: if isAdmin();
+    }
+
+    // ============================================
+    // CATEGORIES COLLECTION
+    // ============================================
+    match /categories/{categoryId} {
+      allow read: if isSignedIn();
+      allow create, update, delete: if isAdmin();
+    }
+
+    // ============================================
+    // ORDER CYCLES COLLECTION - **FIXED FOR CART SYNC**
+    // ============================================
+    match /orderCycles/{cycleId} {
+      // Allow all authenticated users to read all cycles (needed for cart sync)
+      allow read: if isSignedIn();
+
+      // Allow authenticated, non-suspended users to create cycles
+      allow create: if isSignedIn() && isNotSuspended();
+
+      // Allow users to update their own orders within a cycle, or admins to update anything
+      allow update: if (isSignedIn() && isNotSuspended()) || isAdmin();
+
+      // Only admins can delete cycles
+      allow delete: if isAdmin();
+    }
+
+    // ============================================
+    // ORDERS COLLECTION
+    // ============================================
+    match /orders/{orderId} {
+      allow read: if isSignedIn() &&
+                     (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() &&
+                       isNotSuspended() &&
+                       request.resource.data.userId == request.auth.uid;
+      allow update: if (isOwner(resource.data.userId) &&
+                        !request.resource.data.diff(resource.data).affectedKeys().hasAny(['userId', 'totalAmount']))
+                       || isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // ============================================
+    // GROUP ORDERS COLLECTION
+    // ============================================
+    match /groupOrders/{groupOrderId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && isNotSuspended();
+      allow update: if isSignedIn() || isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // ============================================
+    // CARTS COLLECTION - **ENHANCED FOR BETTER SYNC**
+    // ============================================
+    match /carts/{userId} {
+      // User can read their own cart
+      allow read: if isOwner(userId);
+
+      // User can create their own cart
+      allow create: if isOwner(userId) &&
+                       request.resource.data.userId == request.auth.uid;
+
+      // User can update their own cart (including clearing it)
+      allow update: if isOwner(userId);
+
+      // User can delete their own cart
+      allow delete: if isOwner(userId);
+    }
+
+    // ============================================
+    // PAYMENTS COLLECTION
+    // ============================================
+    match /payments/{paymentId} {
+      allow read: if isSignedIn() &&
+                     (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() &&
+                       request.resource.data.userId == request.auth.uid;
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // ============================================
+    // PAYMENT INTENTS COLLECTION
+    // ============================================
+    match /paymentIntents/{intentId} {
+      allow read: if isSignedIn() &&
+                     (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() &&
+                       isNotSuspended() &&
+                       request.resource.data.userId == request.auth.uid;
+      allow update: if isSignedIn() &&
+                       (resource.data.userId == request.auth.uid || isAdmin());
+      allow delete: if isAdmin();
+    }
+
+    // ============================================
+    // PAYMENT FAILURES COLLECTION
+    // ============================================
+    match /paymentFailures/{failureId} {
+      allow read: if isSignedIn() &&
+                     (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn();
+      allow update: if false;
+      allow delete: if isAdmin();
+    }
+
+    // ============================================
+    // FCM TOKENS COLLECTION
+    // ============================================
+    match /fcmTokens/{userId} {
+      allow read: if isOwner(userId);
+      allow create: if isOwner(userId) &&
+                       request.resource.data.userId == request.auth.uid;
+      allow update: if isOwner(userId);
+      allow delete: if isOwner(userId);
+    }
+
+    // ============================================
+    // SUSPENSIONS COLLECTION
+    // ============================================
+    match /suspensions/{suspensionId} {
+      allow read: if isSignedIn() &&
+                     (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isAdmin();
+      allow update: if false;
+      allow delete: if isAdmin();
+    }
+
+    // ============================================
+    // NOTIFICATIONS COLLECTION
+    // ============================================
+    match /notifications/{notificationId} {
+      allow read: if isSignedIn() &&
+                     resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn();
+      allow update: if isSignedIn() &&
+                       resource.data.userId == request.auth.uid;
+      allow delete: if isSignedIn() &&
+                       resource.data.userId == request.auth.uid;
+    }
+
+    // ============================================
+    // ADMIN ONLY COLLECTIONS
+    // ============================================
+    match /analytics/{document=**} {
+      allow read, write: if isAdmin();
+    }
+
+    match /logs/{document=**} {
+      allow read, write: if isAdmin();
+    }
+
+    match /reports/{document=**} {
+      allow read, write: if isAdmin();
+    }
+
+    // ============================================
+    // DENY ALL OTHER COLLECTIONS
+    // ============================================
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

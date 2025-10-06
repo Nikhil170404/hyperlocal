@@ -44,11 +44,12 @@ export function CartProvider({ children }) {
   const [syncing, setSyncing] = useState(false);
   const [initialized, setInitialized] = useState(false);
   const { currentUser } = useAuth();
-  
+
   const saveTimeoutRef = useRef(null);
   const isMountedRef = useRef(true);
   const unsubscribeRef = useRef(null);
   const initTimeoutRef = useRef(null);
+  const isLocalUpdateRef = useRef(false); // Track if update is from local action
   const localStorageKey = 'groupbuy_cart';
 
   useEffect(() => {
@@ -128,12 +129,19 @@ export function CartProvider({ children }) {
                 if (snapshot.exists()) {
                   const data = snapshot.data();
                   const items = data.items || [];
-                  
+
+                  // Skip if this is from our own local update
+                  if (isLocalUpdateRef.current) {
+                    console.log('⏭️ Skipping Firestore update (local change in progress)');
+                    isLocalUpdateRef.current = false;
+                    return;
+                  }
+
                   // Only update if different
                   setCartItems(prevItems => {
                     if (JSON.stringify(items) !== JSON.stringify(prevItems)) {
                       saveToLocalStorage(items);
-                      console.log('🔄 Cart updated from Firestore');
+                      console.log('🔄 Cart updated from Firestore (remote change)');
                       return items;
                     }
                     return prevItems;
@@ -188,8 +196,9 @@ export function CartProvider({ children }) {
 
     try {
       setSyncing(true);
+      isLocalUpdateRef.current = true; // Mark as local update
       const cartRef = doc(db, 'carts', currentUser.uid);
-      
+
       await setDoc(cartRef, {
         userId: currentUser.uid,
         items: items,
@@ -197,11 +206,12 @@ export function CartProvider({ children }) {
         totalAmount: items.reduce((sum, item) => sum + (item.groupPrice * item.quantity), 0),
         updatedAt: serverTimestamp()
       });
-      
+
       console.log('✅ Cart saved to Firestore');
     } catch (error) {
       console.error('❌ Failed to save cart to Firestore:', error);
       toast.error('Failed to sync cart. Changes saved locally.');
+      isLocalUpdateRef.current = false; // Reset on error
     } finally {
       if (isMountedRef.current) {
         setSyncing(false);
